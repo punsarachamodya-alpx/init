@@ -41,6 +41,8 @@ export interface LedgerEvent {
   confirmedByUserId: string;
   evidence: Evidence;
   correctsEventId: string | null;
+  /** null = ordinary event; replace = supersedes another event; void = retracts another event. */
+  correctionKind: 'replace' | 'void' | null;
   payload: Record<string, unknown>;
 }
 
@@ -77,7 +79,7 @@ export async function createContainer(
 }
 
 const EVENT_COLUMNS = `id, seq, company_id, recorded_by_company_id, container_id, event_type, occurred_at, recorded_at, source_type, source_ref,
-  evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload, confirmed_by_user_id`;
+  evidence_type, message_id, document_id, evidence_note, corrects_event_id, correction_kind, payload, confirmed_by_user_id`;
 
 interface EventRow {
   id: string;
@@ -95,6 +97,7 @@ interface EventRow {
   document_id: string | null;
   evidence_note: string | null;
   corrects_event_id: string | null;
+  correction_kind: 'replace' | 'void' | null;
   payload: Record<string, unknown>;
   confirmed_by_user_id: string;
 }
@@ -124,17 +127,23 @@ function toEvent(row: EventRow): LedgerEvent {
     confirmedByUserId: row.confirmed_by_user_id,
     evidence: toEvidence(row),
     correctsEventId: row.corrects_event_id,
+    correctionKind: row.correction_kind,
     payload: row.payload,
   };
 }
 
-async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId: string | null): Promise<LedgerEvent> {
+async function insertEvent(
+  c: CompanyClient,
+  input: EventInput,
+  correctsEventId: string | null,
+  correctionKind: 'replace' | 'void' | null,
+): Promise<LedgerEvent> {
   const ev = input.evidence;
   const { rows } = await c.query<EventRow>(
     `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref,
-                         evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload)
+                         evidence_type, message_id, document_id, evidence_note, corrects_event_id, correction_kind, payload)
      VALUES (COALESCE((SELECT company_id FROM containers WHERE id = $1), app_company_id()),
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING ${EVENT_COLUMNS}`,
     [
       input.containerId,
@@ -147,6 +156,7 @@ async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId:
       ev.type === 'document' ? ev.documentId : null,
       ev.type === 'manual' ? ev.note : null,
       correctsEventId,
+      correctionKind,
       JSON.stringify(input.payload ?? {}),
     ],
   );
@@ -155,7 +165,7 @@ async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId:
 
 /** Append a new event to the ledger. The confirming person is the acting user (set by the database). */
 export function appendEvent(c: CompanyClient, input: EventInput): Promise<LedgerEvent> {
-  return insertEvent(c, input, null);
+  return insertEvent(c, input, null, null);
 }
 
 /**
@@ -163,7 +173,27 @@ export function appendEvent(c: CompanyClient, input: EventInput): Promise<Ledger
  * The original row stays exactly as written; current status ignores superseded events.
  */
 export function appendCorrection(c: CompanyClient, correctsEventId: string, input: EventInput): Promise<LedgerEvent> {
-  return insertEvent(c, input, correctsEventId);
+  return insertEvent(c, input, correctsEventId, 'replace');
+}
+
+/**
+ * Retract a false event without deleting it: appends a `void` row carrying the voided event's own type.
+ * The owning CHA may void any event on its ledger; other roles only what they may record. The evidence
+ * is the reason. Throws if the event does not exist OR is not visible to the caller (same error either way).
+ */
+export async function voidEvent(c: CompanyClient, eventId: string, input: { source: Source; evidence: Evidence }): Promise<LedgerEvent> {
+  const target = await c.query<{ container_id: string; event_type: EventType }>(
+    'SELECT container_id, event_type FROM events WHERE id = $1',
+    [eventId],
+  );
+  const row = target.rows[0];
+  if (!row) throw new Error('event not found or not permitted (row-level security)');
+  return insertEvent(
+    c,
+    { containerId: row.container_id, eventType: row.event_type, occurredAt: new Date(), source: input.source, evidence: input.evidence },
+    eventId,
+    'void',
+  );
 }
 
 /** All events for a container in the order they were recorded, corrections included. */

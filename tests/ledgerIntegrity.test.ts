@@ -86,7 +86,11 @@ describe('ledger order and time cannot be forged', () => {
           [companyId, containerId],
         ),
       ),
-    ).rejects.toThrow(/check constraint/);
+    ).rejects.toThrow(/row-level security|check constraint/); // the policy refuses first (the target does not exist yet)
+    const def = await getAppPool().query<{ def: string }>(
+      "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'events_no_self_correction'",
+    );
+    expect(def.rows[0]?.def).toMatch(/corrects_event_id IS DISTINCT FROM id/); // and the constraint backs it up for any role
     const fresh = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
     await withActor(cha, (c) => appendEvent(c, base({ containerId: fresh })));
     expect((await withActor(cha, (c) => currentStatus(c, fresh)))!.eventType).toBe('do_received');
@@ -224,7 +228,7 @@ describe('grants and triggers are exactly as designed', () => {
     );
     const insertable = cols.rows.filter((r) => r.ok).map((r) => r.column_name).sort();
     expect(insertable).toEqual(
-      ['company_id', 'container_id', 'event_type', 'occurred_at', 'source_type', 'source_ref', 'evidence_type', 'message_id', 'document_id', 'evidence_note', 'corrects_event_id', 'payload'].sort(),
+      ['company_id', 'container_id', 'event_type', 'occurred_at', 'source_type', 'source_ref', 'evidence_type', 'message_id', 'document_id', 'evidence_note', 'corrects_event_id', 'correction_kind', 'payload'].sort(),
     );
   });
 
