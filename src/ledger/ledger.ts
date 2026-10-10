@@ -7,6 +7,19 @@ import type { EventType } from '../domain/statusChain.ts';
 // never from the caller. Events are appended, never changed: a correction is a new
 // event that references the one it corrects.
 
+/** Thrown when an event is appended without a named person confirming it. */
+export class ConfirmationRequiredError extends Error {
+  constructor(message = 'confirmedBy must name the person who confirmed the event') {
+    super(message);
+    this.name = 'ConfirmationRequiredError';
+  }
+}
+
+/** Trim spaces and invisible characters (zero-width space/joiner, BOM, control and format chars). */
+function cleanName(raw: unknown): string {
+  return typeof raw === 'string' ? raw.replace(/[\p{C}\p{Z}]+/gu, ' ').trim() : '';
+}
+
 export type Source = { type: 'person' | 'system'; ref: string };
 
 export type Evidence =
@@ -121,6 +134,11 @@ function toEvent(row: EventRow): LedgerEvent {
 
 async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId: string | null): Promise<LedgerEvent> {
   const ev = input.evidence;
+  const confirmedBy = cleanName(input.confirmedBy);
+  if (!confirmedBy) throw new ConfirmationRequiredError();
+  if (input.source.type === 'system' && confirmedBy.toLowerCase() === cleanName(input.source.ref).toLowerCase()) {
+    throw new ConfirmationRequiredError('a system source cannot confirm its own event');
+  }
   const { rows } = await c.query<EventRow>(
     `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref,
                          evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload,
@@ -139,7 +157,7 @@ async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId:
       ev.type === 'manual' ? ev.note : null,
       correctsEventId,
       JSON.stringify(input.payload ?? {}),
-      input.confirmedBy,
+      confirmedBy,
     ],
   );
   return toEvent(rows[0]!);
