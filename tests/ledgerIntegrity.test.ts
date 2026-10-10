@@ -174,6 +174,20 @@ describe('the confirming person is the acting user', () => {
   });
 });
 
+describe('role gates', () => {
+  test.each(['client', 'haulier'] as const)('a %s user cannot create containers or events', async (kind) => {
+    const actor = await seedActor(kind);
+    await expect(withActor(actor, (c) => createContainer(c, { blNo: newBl(), containerNo: validContainerNo() }))).rejects.toThrow(/row-level security/);
+    await expect(withActor(actor, (c) => appendEvent(c, base()))).rejects.toThrow(/row-level security/);
+  });
+
+  test.each(['client', 'haulier'] as const)('a %s user can store its own messages and documents', async (kind) => {
+    const actor = await seedActor(kind);
+    await expect(seedMessage(actor)).resolves.toBeTruthy();
+    await expect(seedDocument(actor)).resolves.toBeTruthy();
+  });
+});
+
 describe('users', () => {
   test('a role must match its company kind', async () => {
     const bad = (kind: string, role: string) =>

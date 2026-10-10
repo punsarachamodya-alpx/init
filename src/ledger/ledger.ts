@@ -7,19 +7,6 @@ import type { EventType } from '../domain/statusChain.ts';
 // never from the caller. Events are appended, never changed: a correction is a new
 // event that references the one it corrects.
 
-/** Thrown when an event is appended without a named person confirming it. */
-export class ConfirmationRequiredError extends Error {
-  constructor(message = 'confirmedBy must name the person who confirmed the event') {
-    super(message);
-    this.name = 'ConfirmationRequiredError';
-  }
-}
-
-/** Trim spaces and invisible characters (zero-width space/joiner, BOM, control and format chars). */
-function cleanName(raw: unknown): string {
-  return typeof raw === 'string' ? raw.replace(/[\p{C}\p{Z}]+/gu, ' ').trim() : '';
-}
-
 export type Source = { type: 'person' | 'system'; ref: string };
 
 export type Evidence =
@@ -33,8 +20,6 @@ export interface EventInput {
   occurredAt: Date;
   /** Who or what reported it (driver, intake, staff member). */
   source: Source;
-  /** The person who reviewed the suggestion and confirmed it. Required for every event. */
-  confirmedBy: string;
   evidence: Evidence;
   payload?: Record<string, unknown>;
 }
@@ -47,7 +32,8 @@ export interface LedgerEvent {
   occurredAt: Date;
   recordedAt: Date;
   source: Source;
-  confirmedBy: string;
+  /** The user who confirmed the event: always the acting user, set by the database. */
+  confirmedByUserId: string;
   evidence: Evidence;
   correctsEventId: string | null;
   payload: Record<string, unknown>;
@@ -65,27 +51,28 @@ export interface CurrentStatus {
 export interface Container {
   id: string;
   containerNo: string;
+  blNo: string;
   cargoType: 'FCL' | 'LCL';
 }
 
 /** Validates the ISO 6346 check digit (throws InvalidContainerNoError) before anything is written. */
 export async function createContainer(
   c: CompanyClient,
-  input: { containerNo: string; cargoType?: 'FCL' | 'LCL' },
+  input: { containerNo: string; blNo: string; cargoType?: 'FCL' | 'LCL' },
 ): Promise<Container> {
   const containerNo = parseContainerNo(input.containerNo);
-  const { rows } = await c.query<{ id: string; container_no: string; cargo_type: 'FCL' | 'LCL' }>(
-    `INSERT INTO containers (company_id, container_no, cargo_type)
-     VALUES (app_company_id(), $1, $2)
-     RETURNING id, container_no, cargo_type`,
-    [containerNo, input.cargoType ?? 'FCL'],
+  const { rows } = await c.query<{ id: string; container_no: string; bl_no: string; cargo_type: 'FCL' | 'LCL' }>(
+    `INSERT INTO containers (company_id, container_no, bl_no, cargo_type)
+     VALUES (app_company_id(), $1, $2, $3)
+     RETURNING id, container_no, bl_no, cargo_type`,
+    [containerNo, input.blNo.trim(), input.cargoType ?? 'FCL'],
   );
   const row = rows[0]!;
-  return { id: row.id, containerNo: row.container_no, cargoType: row.cargo_type };
+  return { id: row.id, containerNo: row.container_no, blNo: row.bl_no, cargoType: row.cargo_type };
 }
 
 const EVENT_COLUMNS = `id, seq, container_id, event_type, occurred_at, recorded_at, source_type, source_ref,
-  evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload, confirmed_by`;
+  evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload, confirmed_by_user_id`;
 
 interface EventRow {
   id: string;
@@ -102,7 +89,7 @@ interface EventRow {
   evidence_note: string | null;
   corrects_event_id: string | null;
   payload: Record<string, unknown>;
-  confirmed_by: string;
+  confirmed_by_user_id: string;
 }
 
 function toEvidence(row: EventRow): Evidence {
@@ -125,7 +112,7 @@ function toEvent(row: EventRow): LedgerEvent {
     occurredAt: row.occurred_at,
     recordedAt: row.recorded_at,
     source: { type: row.source_type, ref: row.source_ref },
-    confirmedBy: row.confirmed_by,
+    confirmedByUserId: row.confirmed_by_user_id,
     evidence: toEvidence(row),
     correctsEventId: row.corrects_event_id,
     payload: row.payload,
@@ -134,16 +121,10 @@ function toEvent(row: EventRow): LedgerEvent {
 
 async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId: string | null): Promise<LedgerEvent> {
   const ev = input.evidence;
-  const confirmedBy = cleanName(input.confirmedBy);
-  if (!confirmedBy) throw new ConfirmationRequiredError();
-  if (input.source.type === 'system' && confirmedBy.toLowerCase() === cleanName(input.source.ref).toLowerCase()) {
-    throw new ConfirmationRequiredError('a system source cannot confirm its own event');
-  }
   const { rows } = await c.query<EventRow>(
     `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref,
-                         evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload,
-                         confirmed_by)
-     VALUES (app_company_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                         evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload)
+     VALUES (app_company_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING ${EVENT_COLUMNS}`,
     [
       input.containerId,
@@ -157,13 +138,12 @@ async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId:
       ev.type === 'manual' ? ev.note : null,
       correctsEventId,
       JSON.stringify(input.payload ?? {}),
-      confirmedBy,
     ],
   );
   return toEvent(rows[0]!);
 }
 
-/** Append a new event to the ledger. `confirmedBy` is the person who confirmed the suggestion. */
+/** Append a new event to the ledger. The confirming person is the acting user (set by the database). */
 export function appendEvent(c: CompanyClient, input: EventInput): Promise<LedgerEvent> {
   return insertEvent(c, input, null);
 }

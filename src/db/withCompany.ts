@@ -5,21 +5,29 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export type CompanyClient = pg.PoolClient;
 
+export function assertUuid(value: string, name: string): void {
+  if (!UUID_RE.test(value)) throw new Error(`${name} must be a UUID`);
+}
+
 /**
- * Run `fn` in a transaction scoped to one company. The company id is set as a
- * transaction-local setting that every row-level-security policy reads. There is
- * deliberately no way to obtain a client without a company context.
+ * Run `fn` in a transaction with transaction-local company (and optionally user) settings that
+ * every row-level-security policy reads. There is deliberately no way to obtain a client
+ * without a company context. Prefer `withActor`; this is the shared implementation.
  */
-export async function withCompany<T>(
-  companyId: string,
+export async function runScoped<T>(
+  scope: { companyId: string; userId?: string },
   fn: (client: CompanyClient) => Promise<T>,
   pool: pg.Pool = getAppPool(),
 ): Promise<T> {
-  if (!UUID_RE.test(companyId)) throw new Error('withCompany: companyId must be a UUID');
+  assertUuid(scope.companyId, 'companyId');
+  if (scope.userId !== undefined) assertUuid(scope.userId, 'userId');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT set_config('app.company_id', $1, true)", [companyId]);
+    await client.query("SELECT set_config('app.company_id', $1, true), set_config('app.user_id', $2, true)", [
+      scope.companyId,
+      scope.userId ?? '',
+    ]);
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
@@ -29,4 +37,17 @@ export async function withCompany<T>(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Company-only context, for BOOTSTRAP ONLY (creating a company and its first users).
+ * Without a user the database refuses to read or write containers, events, messages or
+ * documents. Everything else must use `withActor`.
+ */
+export function withCompany<T>(
+  companyId: string,
+  fn: (client: CompanyClient) => Promise<T>,
+  pool?: pg.Pool,
+): Promise<T> {
+  return runScoped({ companyId }, fn, pool);
 }
