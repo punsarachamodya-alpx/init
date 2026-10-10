@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { APP_ROLE, dbUrl } from '../../src/db/config.ts';
+import { APP_ROLE, actorSecretHex, dbUrl } from '../../src/db/config.ts';
 import { runMigrations } from '../../src/db/migrate.ts';
 
 const TEST_DB = 'colombo_test';
@@ -26,6 +26,11 @@ export default async function setup(): Promise<void> {
   const owner = new pg.Pool({ connectionString: dbUrl('OWNER_DATABASE_URL'), max: 1 });
   try {
     await runMigrations(owner);
+    // The verification key the database checks actor tokens against (throwaway, test database only).
+    await owner.query(
+      'INSERT INTO actor_key (id, key) VALUES (true, decode($1, $2)) ON CONFLICT (id) DO UPDATE SET key = excluded.key, set_at = now()',
+      [actorSecretHex(), 'hex'],
+    );
   } finally {
     await owner.end();
   }

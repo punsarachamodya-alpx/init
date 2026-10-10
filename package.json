@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "db:migrate": "node --experimental-strip-types src/db/migrate-cli.ts",
-    "eval:intake": "node --experimental-transform-types scripts/eval-intake.ts"
+    "eval:intake": "node --experimental-transform-types scripts/eval-intake.ts",
+    "set-actor-key": "node --experimental-transform-types scripts/set-actor-key.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

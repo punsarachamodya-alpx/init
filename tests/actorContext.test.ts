@@ -12,7 +12,6 @@ import type { TestActor } from './helpers.ts';
 let cha: TestActor;
 let haulier: TestActor;
 let otherCha: TestActor;
-let containerId: string;
 let owner: pg.Pool;
 
 /** Run raw SQL as the application role with a hand-made app.* setting (what a compromised session could do). */
@@ -36,11 +35,10 @@ beforeAll(async () => {
   haulier = await seedActor('haulier');
   otherCha = await seedActor('cha');
   const messageId = await seedMessage(cha);
-  containerId = await withActor(cha, async (c) => {
+  await withActor(cha, async (c) => {
     const container = await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() });
     await grantAccess(c, { containerId: container.id, granteeCompanyId: haulier.companyId, kind: 'haulier' });
     await appendEvent(c, { containerId: container.id, eventType: 'do_received', occurredAt: new Date('2026-10-12T03:00:00Z'), source: { type: 'person', ref: 'synthetic' }, evidence: { type: 'message', messageId } });
-    return container.id;
   });
   owner = new pg.Pool({ connectionString: dbUrl('OWNER_DATABASE_URL'), max: 2 });
 });

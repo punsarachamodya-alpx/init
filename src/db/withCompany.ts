@@ -1,17 +1,12 @@
 import type pg from 'pg';
+import { signActor } from './actorToken.ts';
 import { getAppPool } from './pool.ts';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type CompanyClient = pg.PoolClient;
 
-export function assertUuid(value: string, name: string): void {
-  if (!UUID_RE.test(value)) throw new Error(`${name} must be a UUID`);
-}
-
 /**
- * Run `fn` in a transaction with transaction-local company (and optionally user) settings that
- * every row-level-security policy reads. There is deliberately no way to obtain a client
+ * Run `fn` in a transaction whose identity is a signed, transaction-local actor token that every
+ * row-level-security policy verifies in the database. There is deliberately no way to obtain a client
  * without a company context. Prefer `withActor`; this is the shared implementation.
  */
 export async function runScoped<T>(
@@ -19,15 +14,11 @@ export async function runScoped<T>(
   fn: (client: CompanyClient) => Promise<T>,
   pool: pg.Pool = getAppPool(),
 ): Promise<T> {
-  assertUuid(scope.companyId, 'companyId');
-  if (scope.userId !== undefined) assertUuid(scope.userId, 'userId');
+  const token = signActor(scope); // validates the ids
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("SELECT set_config('app.company_id', $1, true), set_config('app.user_id', $2, true)", [
-      scope.companyId,
-      scope.userId ?? '',
-    ]);
+    await client.query("SELECT set_config('app.actor', $1, true)", [token]);
     const result = await fn(client);
     await client.query('COMMIT');
     return result;

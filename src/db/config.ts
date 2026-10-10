@@ -21,3 +21,15 @@ export function dbUrl(name: DbUrlName): string {
 }
 
 export const APP_ROLE = 'colombo_app';
+
+// Secret for signing actor tokens (hex, >= 32 bytes). Held only by the app process: the database
+// holds a copy in actor_key (owner-only) to verify with. Tests use a throwaway value.
+const TEST_ACTOR_SECRET = 'ab'.repeat(32);
+
+export function actorSecretHex(): string {
+  const fromEnv = process.env.ACTOR_CONTEXT_SECRET;
+  const secret = fromEnv || (isTest ? TEST_ACTOR_SECRET : undefined);
+  if (!secret) throw new Error('ACTOR_CONTEXT_SECRET is not set');
+  if (!/^[0-9a-f]{64,}$/i.test(secret)) throw new Error('ACTOR_CONTEXT_SECRET must be hex, at least 32 bytes');
+  return secret.toLowerCase();
+}
