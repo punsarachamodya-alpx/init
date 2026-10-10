@@ -53,3 +53,9 @@ export function selectExtractor(env: { NODE_ENV?: string; INTAKE_EXTRACTOR?: str
   if (env.ANTHROPIC_API_KEY) return new ClaudeExtractor();
   return new UnavailableExtractor();
 }
+
+/** What is stored as the suggestion's `extractor` label. */
+export function extractorLabel(env: { NODE_ENV?: string | undefined; INTAKE_EXTRACTOR?: string | undefined; ANTHROPIC_API_KEY?: string | undefined; INTAKE_MODEL?: string | undefined } = process.env): string {
+  if (env.INTAKE_EXTRACTOR === 'fake') return 'rules-fake';
+  return env.ANTHROPIC_API_KEY ? (env.INTAKE_MODEL ?? 'claude') : 'none';
+}

@@ -13,25 +13,36 @@ const RAW_DB = {
   ],
 };
 
+// No hardcoded user-facing text in the web app: strings live in /locales (en, si, ta) and come through t().
+// JSX text with letters and literal text attributes are refused; punctuation, numbers and {expressions} are fine.
+const NO_JSX_LITERALS = [
+  { selector: 'JSXText[value=/\\p{L}/u]', message: 'Hardcoded text in JSX: add a key to /locales and use tr(...).' },
+  { selector: 'JSXAttribute[name.name=/^(title|alt|placeholder|aria-label|label)$/] > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX attribute: use tr(...).' },
+];
+
+const DB_SYNTAX = [
+  {
+    selector: "ImportExpression[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg(-pool|-boss)?$/]",
+    message: 'Do not import the raw database layer dynamically; use withActor.',
+  },
+  {
+    selector: "ExportNamedDeclaration[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg(-pool|-boss)?$/]",
+    message: 'Do not re-export the raw database layer.',
+  },
+];
+
 export default tseslint.config(
-  { ignores: ['node_modules', 'dist', 'coverage', '.next', 'scripts/**'] },
+  { ignores: ['node_modules', 'dist', 'coverage', '.next', 'test-results', 'playwright-report', 'scripts/**'] },
   ...tseslint.configs.recommended,
   {
     files: ['**/*.{ts,tsx,mts,cts,js,mjs,cjs}'],
-    ignores: ['src/db/**', 'tests/**', 'scripts/**', 'eslint.config.js', 'vitest.config.ts', 'playwright.config.ts'],
+    ignores: ['src/db/**', 'tests/**', 'e2e/**', 'scripts/**', 'eslint.config.js', 'vitest.config.ts', 'playwright.config.ts'],
     rules: {
       '@typescript-eslint/no-restricted-imports': ['error', RAW_DB],
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: "ImportExpression[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg(-pool|-boss)?$/]",
-          message: 'Do not import the raw database layer dynamically; use withActor.',
-        },
-        {
-          selector: "ExportNamedDeclaration[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg(-pool|-boss)?$/]",
-          message: 'Do not re-export the raw database layer.',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...DB_SYNTAX],
     },
+  },  {
+    files: ['app/**/*.{ts,tsx}'],
+    rules: { 'no-restricted-syntax': ['error', ...DB_SYNTAX, ...NO_JSX_LITERALS] },
   },
 );

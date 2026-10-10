@@ -37,7 +37,7 @@ export function parseDemoUsers(json: string): DemoUser[] {
   });
 }
 
-export function loadDemoUsers(file: string = DEMO_USERS_FILE): DemoUser[] {
+export function loadDemoUsers(file: string = process.env.DEMO_USERS_FILE ?? DEMO_USERS_FILE): DemoUser[] {
   assertDevLoginAllowed();
   try {
     return parseDemoUsers(readFileSync(file, 'utf8'));

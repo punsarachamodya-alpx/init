@@ -32,3 +32,22 @@ export function formatAge(ms: number, locale: Locale): string {
   if (minutes > 0 && parts.length < 2 && days === 0) parts.push(unit(minutes, 'minute'));
   return parts.length > 0 ? parts.join(' ') : unit(0, 'minute');
 }
+
+/** "YYYY-MM-DDTHH:mm" in Colombo time, the value format of <input type="datetime-local">. */
+export function toColomboInput(date: Date): string {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', { timeZone: DISPLAY_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(date)
+      .map((x) => [x.type, x.value]),
+  ) as Record<string, string>;
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+}
+
+/** Parse a Colombo-time "YYYY-MM-DDTHH:mm" input into the UTC instant it names. Sri Lanka has no daylight saving (+05:30). Null if not a real date and time. */
+export function fromColomboInput(value: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim());
+  if (!m) return null;
+  const d = new Date(`${value.trim()}:00+05:30`);
+  if (Number.isNaN(d.getTime())) return null;
+  return toColomboInput(d) === value.trim() ? d : null; // rejects 31 Feb and the like (the Date would roll over)
+}

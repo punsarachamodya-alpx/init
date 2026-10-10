@@ -4,7 +4,7 @@ import { loadBoard, loadTimeline } from '../src/board/board.ts';
 import { closeAppPool } from '../src/db/pool.ts';
 import { withActor } from '../src/db/withActor.ts';
 import type { EventType } from '../src/domain/statusChain.ts';
-import { formatAge, formatColombo } from '../src/i18n/format.ts';
+import { formatAge, formatColombo, fromColomboInput, toColomboInput } from '../src/i18n/format.ts';
 import { appendCorrection, appendEvent, createContainer, voidEvent } from '../src/ledger/ledger.ts';
 import { newBl, seedActor, seedMessage, validContainerNo } from './helpers.ts';
 import type { TestActor } from './helpers.ts';
@@ -170,5 +170,15 @@ describe('display in Asia/Colombo', () => {
     expect(formatAge(-5000, 'en')).toMatch(/0\s*min/);
     expect(formatAge(ms(2, 4, 30), 'si')).not.toBe(formatAge(ms(2, 4, 30), 'en'));
     expect(formatAge(ms(2, 4, 30), 'ta')).not.toBe(formatAge(ms(2, 4, 30), 'en'));
+  });
+
+  test('datetime-local values are Colombo time in both directions, and impossible dates are refused', () => {
+    expect(toColomboInput(new Date('2026-10-14T20:00:00Z'))).toBe('2026-10-15T01:30');
+    expect(fromColomboInput('2026-10-15T01:30')?.toISOString()).toBe('2026-10-14T20:00:00.000Z');
+    expect(fromColomboInput('2026-02-31T10:00')).toBeNull();
+    expect(fromColomboInput('2026-10-15 01:30')).toBeNull();
+    expect(fromColomboInput('')).toBeNull();
+    const d = new Date('2026-12-31T18:45:00Z');
+    expect(fromColomboInput(toColomboInput(d))?.getTime()).toBe(d.getTime());
   });
 });

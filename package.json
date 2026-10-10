@@ -12,7 +12,12 @@
     "lint": "eslint .",
     "db:migrate": "node --experimental-strip-types src/db/migrate-cli.ts",
     "eval:intake": "node --experimental-transform-types scripts/eval-intake.ts",
-    "set-actor-key": "node --experimental-transform-types scripts/set-actor-key.ts"
+    "set-actor-key": "node --experimental-transform-types scripts/set-actor-key.ts",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "seed:demo": "node --experimental-transform-types scripts/seed-demo.ts",
+    "e2e": "playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",

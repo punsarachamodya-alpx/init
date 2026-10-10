@@ -77,3 +77,22 @@ describe('extractor selection', () => {
     expect(none.fields.container_no ?? null).toBeNull();
   });
 });
+
+describe('what the user is told', () => {
+  test('database and unexpected errors are mapped to a fixed code, never passed through', async () => {
+    const { uiErrorCode } = await import('../src/web/errors.ts');
+    const { ConfirmationError } = await import('../src/intake/confirm.ts');
+    const { InvalidContainerNoError } = await import('../src/domain/iso6346.ts');
+    expect(uiErrorCode(new ConfirmationError('duplicate', 'x'))).toBe('duplicate');
+    expect(uiErrorCode(new InvalidContainerNoError('ZZZU1234565'))).toBe('invalid_container');
+    expect(uiErrorCode(Object.assign(new Error('new row violates row-level security policy for table "events"'), { code: '42501' }))).toBe('forbidden');
+    expect(uiErrorCode(new Error('connection to server at "10.0.0.5" failed; actor_key'))).toBe('unexpected');
+    expect(uiErrorCode('boom')).toBe('unexpected');
+  });
+
+  test('return paths stay on this site', async () => {
+    const { safeReturnTo } = await import('../src/web/errors.ts');
+    expect(safeReturnTo('/inbox?x=1')).toBe('/inbox?x=1');
+    for (const bad of ['//evil.example', 'https://evil.example', 'javascript:alert(1)', '/\\evil', undefined, 5]) expect(safeReturnTo(bad), String(bad)).toBe('/');
+  });
+});
