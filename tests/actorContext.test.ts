@@ -232,6 +232,19 @@ describe('the signing key is out of reach of the application role', () => {
     expect(rows[0]!.proconfig?.join(',')).toMatch(/search_path=pg_catalog, public/);
   });
 
+  test('a genuine fault in the verifier surfaces as an error; it is not swallowed into "nobody"', async () => {
+    const c = await owner.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('ALTER TABLE actor_key RENAME TO actor_key_moved'); // DDL is transactional: rolled back below
+      await c.query("SELECT set_config('app.actor', $1, true)", [token(cha)]);
+      await expect(c.query('SELECT app_company_id()')).rejects.toThrow(/actor_key/);
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      c.release();
+    }
+  });
+
   test('with no key provisioned, every token fails closed', async () => {
     const c = await owner.connect();
     try {
