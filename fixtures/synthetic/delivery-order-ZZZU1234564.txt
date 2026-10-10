@@ -1,0 +1,21 @@
+SYNTHETIC TEST DOCUMENT - NOT REAL DATA
+
+EXAMPLE SHIPPING LINE (LANKA) LTD
+DELIVERY ORDER
+
+D/O No:        DO-2026-000101
+Date:          12/10/2026
+Vessel/Voyage: MV TEST HORIZON / 026E
+Port of Disch: Colombo
+ETA:           10/10/2026
+B/L No:        ESLCMB000101
+Consignee:     SAMPLE IMPORTS (PVT) LTD
+Notify:        SAMPLE IMPORTS (PVT) LTD
+Cargo:         GENERAL CARGO - PACKAGES
+Container:     ZZZU1234564 / 40HC / SEAL ZS000101
+
+Please release the above container(s) to:
+CHA:           DEMO CLEARING AGENTS (PVT) LTD
+
+Freight charges: PAID
+Delivery order valid until: 19/10/2026

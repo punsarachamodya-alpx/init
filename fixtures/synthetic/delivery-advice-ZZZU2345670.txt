@@ -1,0 +1,18 @@
+From: noreply@terminal.example.invalid
+To: ops@demo-clearing.example.invalid
+Subject: [SYNTHETIC] E-Delivery Advice - ZZZU2345670
+
+SYNTHETIC TEST DOCUMENT - NOT REAL DATA
+
+Terminal e-Delivery Advice
+
+Container:      ZZZU2345670
+Size/Type:      20GP
+Vessel/Voyage:  MV TEST HORIZON / 026E
+B/L No:         ESLCMB000102
+Consignee:      SAMPLE EXPORTS AND IMPORTS (PVT) LTD
+Customs status: RELEASED (Green channel)
+Delivery advice issued: 13/10/2026 14:35
+Storage free until:     16/10/2026
+
+The above container is cleared for collection. Present this advice with the gate pass at the terminal gate.

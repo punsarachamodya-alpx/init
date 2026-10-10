@@ -1,0 +1,16 @@
+SYNTHETIC TEST DOCUMENT - NOT REAL DATA
+
+CUSTOMS DECLARATION - SUMMARY PRINTOUT (TEST LAYOUT)
+
+Registration No:  TEST-2026-C-000103
+Registered:       12/10/2026 09:20
+Declarant (CHA):  DEMO CLEARING AGENTS (PVT) LTD
+Importer:         SAMPLE TRADING CO (PVT) LTD
+B/L No:           ESLCMB000103
+Vessel/Voyage:    MV TEST HORIZON / 026E
+Container:        ZZZU3456787 (40GP)
+Selectivity:      RED - physical examination required
+Exam location:    Grayline 1
+Exam scheduled:   14/10/2026 10:00
+
+Note: this printout is a made-up test layout and does not reproduce any real customs form.

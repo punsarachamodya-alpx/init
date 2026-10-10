@@ -1,0 +1,2 @@
+container_no,vessel_arrival,do_received,cusdec_lodged,channel,exam_yard,release_advice,gate_pass,truck_dispatched,pickup,delivered,empty_returned,storage_or_demurrage_days,notes
+ZZZU1234564,2026-10-10 06:00,2026-10-12 08:30,2026-10-12 09:20,green,,2026-10-13 14:35,2026-10-14 09:00,2026-10-14 10:30,2026-10-14 13:10,2026-10-14 18:45,2026-10-16 10:00,0,SYNTHETIC EXAMPLE ROW - delete before logging real data

@@ -1,0 +1,78 @@
+{
+  "_note": "Ground truth for synthetic fixtures. Extraction is scored against these fields. Dates are ISO 8601; times are Asia/Colombo.",
+  "documents": [
+    {
+      "file": "synthetic/delivery-order-ZZZU1234564.txt",
+      "doc_type": "delivery_order",
+      "expected_event": "do_received",
+      "fields": {
+        "container_no": "ZZZU1234564",
+        "bl_no": "ESLCMB000101",
+        "vessel": "MV TEST HORIZON",
+        "voyage": "026E",
+        "consignee": "SAMPLE IMPORTS (PVT) LTD",
+        "cha": "DEMO CLEARING AGENTS (PVT) LTD",
+        "do_date": "2026-10-12",
+        "do_valid_until": "2026-10-19",
+        "freight_paid": true
+      }
+    },
+    {
+      "file": "synthetic/delivery-advice-ZZZU2345670.txt",
+      "doc_type": "delivery_advice",
+      "expected_event": "release_advice",
+      "fields": {
+        "container_no": "ZZZU2345670",
+        "bl_no": "ESLCMB000102",
+        "vessel": "MV TEST HORIZON",
+        "voyage": "026E",
+        "consignee": "SAMPLE EXPORTS AND IMPORTS (PVT) LTD",
+        "channel": "green",
+        "advice_issued_at": "2026-10-13T14:35:00+05:30",
+        "storage_free_until": "2026-10-16"
+      }
+    },
+    {
+      "file": "synthetic/cusdec-summary-ZZZU3456787.txt",
+      "doc_type": "cusdec_summary",
+      "expected_event": "channel_assigned",
+      "fields": {
+        "container_no": "ZZZU3456787",
+        "bl_no": "ESLCMB000103",
+        "vessel": "MV TEST HORIZON",
+        "voyage": "026E",
+        "importer": "SAMPLE TRADING CO (PVT) LTD",
+        "cha": "DEMO CLEARING AGENTS (PVT) LTD",
+        "cusdec_registered_at": "2026-10-12T09:20:00+05:30",
+        "channel": "red",
+        "exam_location": "Grayline 1",
+        "exam_scheduled_at": "2026-10-14T10:00:00+05:30"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "channel": "whatsapp",
+      "text": "ZZZU1234564 DO kittu. CHA ge cusdec adha dannawa.",
+      "language": "si-latin",
+      "expected_event": "do_received",
+      "fields": { "container_no": "ZZZU1234564" },
+      "note": "Romanised Sinhala: DO received, CusDec to be lodged today. Extraction should suggest do_received and ask for confirmation."
+    },
+    {
+      "channel": "whatsapp",
+      "text": "ZZZU2345670 gate pass ready, truck 2pm pickup",
+      "language": "en",
+      "expected_event": "gate_pass",
+      "fields": { "container_no": "ZZZU2345670" }
+    },
+    {
+      "channel": "whatsapp",
+      "text": "ZZZU9999999 reached the yard",
+      "language": "en",
+      "expected_event": null,
+      "fields": {},
+      "note": "Invalid ISO 6346 check digit. Must be rejected, not saved."
+    }
+  ]
+}
