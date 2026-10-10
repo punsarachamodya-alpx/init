@@ -107,7 +107,7 @@ describe('granting access', () => {
     for (const who of [client, haulierA]) {
       await expect(
         withActor(who, (c) => grantAccess(c, { containerId, granteeCompanyId: haulierB.companyId, kind: 'haulier' })),
-      ).rejects.toThrow(/row-level security|foreign key/);
+      ).rejects.toThrow(/row-level security/); // not a cha_ops: the policy refuses before any foreign key is looked at
     }
   });
 

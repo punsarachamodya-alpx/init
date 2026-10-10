@@ -114,23 +114,40 @@ describe('who may record which stage', () => {
 
   test('an unassigned haulier and another CHA cannot record on the container', async () => {
     const id = await sharedContainer();
-    await expect(ev(haulierB, id, 'gate_pass')).rejects.toThrow(/row-level security|foreign key/);
-    await expect(ev(cha2, id, 'release_advice')).rejects.toThrow(/row-level security|foreign key/);
+    // Through the ledger helper the owner company cannot be resolved (the container is invisible), so it falls
+    // back to the caller's own company and the composite foreign key refuses. The policy itself is pinned by
+    // the raw-insert test below.
+    await expect(ev(haulierB, id, 'gate_pass')).rejects.toThrow(/foreign key/);
+    await expect(ev(cha2, id, 'release_advice')).rejects.toThrow(/foreign key/);
   });
 
   test('a raw insert naming the owning CHA is refused without an active grant (policy, not just the FK)', async () => {
     const id = await sharedContainer();
-    const raw = (actor: TestActor, eventType: string) =>
+    const raw = (actor: TestActor, eventType: string, containerId = id) =>
       withActor(actor, (c) =>
         c.query(
           `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note)
            VALUES ($1, $2, $3, now(), 'person', 'u', 'manual', 'n')`,
-          [cha.companyId, id, eventType],
+          [cha.companyId, containerId, eventType],
         ),
       );
     await expect(raw(haulierB, 'gate_pass')).rejects.toThrow(/row-level security/);
     await expect(raw(cha2, 'release_advice')).rejects.toThrow(/row-level security/);
     await expect(raw(haulierA, 'gate_pass')).resolves.toBeTruthy(); // control: the assigned haulier passes
+    await expect(raw(client, 'cusdec_lodged')).resolves.toBeTruthy(); // control: the granted client passes
+
+    // an ungranted client (shared with haulier A only) and a REVOKED haulier are refused by the policy
+    const ungrantedClient = await seedActor('client');
+    await expect(raw(ungrantedClient, 'cusdec_lodged')).rejects.toThrow(/row-level security/);
+    const h = await seedActor('haulier');
+    const other = await withActor(cha, async (c) => {
+      const container = await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() });
+      await grantAccess(c, { containerId: container.id, granteeCompanyId: h.companyId, kind: 'haulier' });
+      return container.id;
+    });
+    await expect(raw(h, 'gate_pass', other)).resolves.toBeTruthy();
+    await withActor(cha, (c) => revokeAccess(c, { containerId: other, granteeCompanyId: h.companyId, kind: 'haulier' }));
+    await expect(raw(h, 'truck_dispatched', other)).rejects.toThrow(/row-level security/);
   });
 
   test('revoking a haulier stops it recording as well as reading', async () => {
@@ -142,7 +159,7 @@ describe('who may record which stage', () => {
     });
     await expect(ev(h, id, 'gate_pass')).resolves.toBeTruthy();
     await withActor(cha, (c) => revokeAccess(c, { containerId: id, granteeCompanyId: h.companyId, kind: 'haulier' }));
-    await expect(ev(h, id, 'truck_dispatched')).rejects.toThrow(/row-level security|foreign key/);
+    await expect(ev(h, id, 'truck_dispatched')).rejects.toThrow(/foreign key/); // the policy is pinned by the raw-insert test below
   });
 });
 
