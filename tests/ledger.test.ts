@@ -139,7 +139,7 @@ describe('the ledger is append-only', () => {
     ).rejects.toThrow(/foreign key/);
     await expect(
       withActor(cha, (c) => appendCorrection(c, '11111111-1111-4111-8111-111111111111', input(containerId, 'do_received', { evidence: { type: 'manual', note: 'missing' } }))),
-    ).rejects.toThrow(/foreign key/);
+    ).rejects.toThrow(/row-level security/);
     await expect(
       withActor(outsider, (c) => appendCorrection(c, fresh.id, input(containerId, 'cusdec_lodged', { evidence: { type: 'manual', note: 'cross tenant' } }))),
     ).rejects.toThrow(/foreign key|row-level security/);
