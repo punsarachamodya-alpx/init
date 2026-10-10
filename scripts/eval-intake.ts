@@ -8,8 +8,14 @@ import { ClaudeExtractor, DEFAULT_MODEL } from '../src/intake/claudeExtractor.ts
 import { EvalAbortedError, dryRunExtractor, evaluate, formatReport, loadEvalItems, resolveLabelsPath } from '../src/intake/eval/index.ts';
 
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
-const labels = resolveLabelsPath(arg('labels'), path.resolve(import.meta.dirname, '../fixtures')); // inside fixtures/ only
-const items = loadEvalItems(labels);
+let items;
+try {
+  const labels = resolveLabelsPath(arg('labels'), path.resolve(import.meta.dirname, '../fixtures')); // inside fixtures/ only
+  items = loadEvalItems(labels);
+} catch (err) {
+  console.error((err as Error).message);
+  process.exit(2);
+}
 
 const dry = arg('dry-run');
 let extractor;
