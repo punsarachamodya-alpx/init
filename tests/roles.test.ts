@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { grantAccess, revokeAccess } from '../src/access/access.ts';
+import { signActor } from '../src/db/actorToken.ts';
 import { dbUrl } from '../src/db/config.ts';
 import { closeAppPool, getAppPool } from '../src/db/pool.ts';
 import { withActor } from '../src/db/withActor.ts';
@@ -235,7 +236,7 @@ describe('payload cannot carry commercial data (hauliers read events)', () => {
       const c = await owner.connect();
       try {
         await c.query('BEGIN');
-        await c.query("SELECT set_config('app.company_id', $1, true), set_config('app.user_id', $2, true)", [cha.companyId, cha.userId]);
+        await c.query("SELECT set_config('app.actor', $1, true)", [signActor({ companyId: cha.companyId, userId: cha.userId })]);
         await expect(
           c.query(
             `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note, payload)

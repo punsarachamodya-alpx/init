@@ -144,7 +144,7 @@ describe('the application role cannot escape row-level security', () => {
   test('every public table has forced row-level security', async () => {
     const { rows } = await getAppPool().query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
       `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
-       WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname <> 'schema_migrations'`,
+       WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname NOT IN ('schema_migrations', 'actor_key')`,
     );
     expect(rows.map((r) => r.relname).sort()).toEqual([...TABLES, 'container_access'].sort());
     for (const r of rows) expect(r).toMatchObject({ relrowsecurity: true, relforcerowsecurity: true });

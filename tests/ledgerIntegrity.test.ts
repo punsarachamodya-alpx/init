@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { signActor } from '../src/db/actorToken.ts';
 import { dbUrl } from '../src/db/config.ts';
 import { closeAppPool, getAppPool } from '../src/db/pool.ts';
 import { withActor } from '../src/db/withActor.ts';
@@ -30,7 +31,7 @@ async function asOwner<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
   const c = await owner.connect();
   try {
     await c.query('BEGIN');
-    await c.query("SELECT set_config('app.company_id', $1, true), set_config('app.user_id', $2, true)", [companyId, cha.userId]);
+    await c.query("SELECT set_config('app.actor', $1, true)", [signActor({ companyId, userId: cha.userId })]);
     return await fn(c);
   } finally {
     await c.query('ROLLBACK').catch(() => undefined);
