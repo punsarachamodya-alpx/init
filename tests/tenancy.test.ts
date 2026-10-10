@@ -146,7 +146,7 @@ describe('the application role cannot escape row-level security', () => {
       `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
        WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname <> 'schema_migrations'`,
     );
-    expect(rows.map((r) => r.relname).sort()).toEqual([...TABLES].sort());
+    expect(rows.map((r) => r.relname).sort()).toEqual([...TABLES, 'container_access'].sort());
     for (const r of rows) expect(r).toMatchObject({ relrowsecurity: true, relforcerowsecurity: true });
   });
 });
