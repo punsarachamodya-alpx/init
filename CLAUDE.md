@@ -17,7 +17,8 @@ Stack: TypeScript, Next.js (App Router), PostgreSQL with row-level security, pg-
 
 ## Rules
 - The event ledger is append-only. Never UPDATE or DELETE event rows. Corrections are new events that reference the one they correct.
-- Every table has `company_id`, and row-level security enforces it. No query runs without a company context.
+- Every table has `company_id`, and row-level security enforces it. No query runs without an acting user and company (`withActor`); `withCompany` is for bootstrap only. Roles come from the `users` table, never from the caller.
+- Hauliers read events of their assigned containers. Anything commercial (freight, demurrage estimate, tariffs, pricing) goes in tables whose policies require `cha_ops` or `client`, and never in event `payload` (key whitelist).
 - Tests use `/fixtures/synthetic` only. Never put real driver, company, container or document data in the repo.
 - Extraction from messages and documents is a suggestion. A person confirms every extracted field before it becomes an event.
 - Every status change records its source (who or what) and evidence (message id, document id, or manual entry).

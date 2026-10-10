@@ -22,6 +22,21 @@ Decisions:
 - Trucking stages: the haulier dispatcher confirms; drivers report.
 - Hauliers never see commercial information (freight, demurrage estimates, client pricing, tariffs).
 
+### Sharing and who records what (implemented, migrations 0004-0006)
+- The **CHA owns** a container record and grants read access to the client and to an assigned haulier. Grants are an append-only log; a revoke is a new row and takes effect immediately for reads and writes.
+- Roles are enforced in the database from the `users` table (`cha_ops`, `client`, `haulier_dispatcher`); the role is never supplied by the caller. A person's user id is also the confirming person on every event they record.
+- Who may record which stage (`event_allowed`, mirrored in `src/domain/statusChain.ts`):
+
+| Role | Stages |
+|---|---|
+| `cha_ops` | vessel discharged, DO received, CusDec lodged, channel assigned, exam, release / delivery advice |
+| `client` (own, granted containers) | DO received, CusDec lodged, channel assigned, exam, release / delivery advice |
+| `haulier_dispatcher` (assigned containers) | gate pass, truck dispatched, picked up, delivered, empty returned |
+
+- The CHA does not record trucking stages (the haulier dispatcher confirms them); change `event_allowed` if the CHA must be able to override.
+- Hauliers can read the events of their assigned containers, so event `payload` accepts only whitelisted non-commercial keys. Messages and documents stay private to the company that received them.
+- Commercial data (freight, demurrage estimates, tariffs, pricing) must live in tables whose policies require `cha_ops` or `client`; hauliers never match.
+
 ## 3. Status chain (fixed, do not add statuses)
 vessel discharged -> DO received -> CusDec lodged -> channel assigned -> (exam, if selected) -> release / delivery advice -> gate pass -> truck dispatched -> picked up -> delivered -> empty returned
 
@@ -31,8 +46,9 @@ vessel discharged -> DO received -> CusDec lodged -> channel assigned -> (exam, 
 - Every event also records `confirmed_by`: the person who confirmed the suggestion. `source` is the reporter (driver, intake, staff); a system source never confirms on its own.
 
 ## 4. Cargo model
+- **Consignment identity**: a container record is one consignment, unique per (company, container number, bill of lading). A recycled container number simply appears again with a different BL.
 - **FCL**: one container, one consignee, one status chain.
-- **LCL (full support, decided)**: one container carries several consignee shipments. Each shipment has its own status chain from DO received onward; the container has shared events (vessel discharged, gate pass, truck dispatched, picked up, empty returned apply per container or per shipment as the data model decides in Prompt 2).
+- **LCL (full support, decided)**: modelled as several rows sharing a container number, each with its own BL and its own status chain. Which trucking stages are shared by the whole physical container is still undecided (see open questions).
 - **Cost note**: full LCL roughly doubles the data model and the board UI. If the pilot slips, LCL is the first thing to defer.
 
 ## 5. Deadlines and demurrage
@@ -87,7 +103,10 @@ TypeScript; Next.js (App Router); PostgreSQL with row-level security; pg-boss jo
 
 ## 12. Open questions
 - Confirm the Section 10 out-of-scope list.
-- LCL event model: which events are per-container vs per-shipment (decide in Prompt 2 plan).
+- LCL trucking: a gate pass, dispatch or pickup of one physical LCL container applies to every consignment on it; decide whether a haulier records it once for all rows or per row.
+- Authentication and user deactivation (prerequisite before real users); operator-only company onboarding.
+- Cross-company evidence visibility (the CHA cannot read a haulier's driver message that an event points at).
+- Retracting a mistaken event (void correction); exam-after-channel and yard rules.
 - Demurrage tariff source and who maintains it.
 - WhatsApp Business API provider and approval timeline.
 - Whether `.claude/` (agents, hooks, settings.json) was meant to be in the repo; it was not uploaded.
