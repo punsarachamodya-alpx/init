@@ -111,8 +111,13 @@ export async function confirmSuggestion(
 
   // The same evidence cannot produce the same event twice (app-level guard).
   const ev = suggestion.evidence;
+  // Voided and superseded events do not count: confirm wrongly -> void -> confirm again must work.
   const dup = await c.query(
-    'SELECT 1 FROM events WHERE container_id = $1 AND event_type = $2 AND (message_id = $3 OR document_id = $4) LIMIT 1',
+    `SELECT 1 FROM events e
+     WHERE e.container_id = $1 AND e.event_type = $2 AND (e.message_id = $3 OR e.document_id = $4)
+       AND e.correction_kind IS DISTINCT FROM 'void'
+       AND NOT EXISTS (SELECT 1 FROM events c WHERE c.corrects_event_id = e.id)
+     LIMIT 1`,
     [container.id, confirmation.eventType, ev.type === 'message' ? ev.messageId : null, ev.type === 'document' ? ev.documentId : null],
   );
   if ((dup.rowCount ?? 0) > 0) throw new ConfirmationError('duplicate', 'this message/document has already produced this event');

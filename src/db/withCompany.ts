@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import { signActor } from './actorToken.ts';
+import { ActorContextError, signActor } from './actorToken.ts';
 import { getAppPool } from './pool.ts';
 
 export type CompanyClient = pg.PoolClient;
@@ -14,12 +14,17 @@ export async function runScoped<T>(
   fn: (client: CompanyClient) => Promise<T>,
   pool: pg.Pool = getAppPool(),
 ): Promise<T> {
-  const token = signActor(scope); // validates the ids
+  signActor(scope); // fail fast on bad ids before taking a connection
   const client = await pool.connect();
+  const token = signActor(scope); // minted AFTER the connection is obtained: a long pool wait cannot expire it
   let broken = false; // a connection in an unknown state is destroyed, never returned to the pool
   try {
     await client.query('BEGIN');
     await client.query("SELECT set_config('app.actor', $1, true)", [token]);
+    // Fail loudly if the database does not accept the token (missing or rotated key, expiry, clock skew)
+    // instead of letting every query quietly return nothing.
+    const accepted = await client.query<{ company: string | null }>('SELECT app_company_id() AS company');
+    if (!accepted.rows[0]?.company) throw new ActorContextError();
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
@@ -33,8 +38,9 @@ export async function runScoped<T>(
   } finally {
     if (!broken) {
       try {
-        // Drops any session-level setting the callback made (set_config(..., false)) before reuse.
-        await client.query('RESET ALL');
+        // Drops session state the callback may have left (settings, temp tables, prepared statements,
+        // advisory locks) before the connection is reused.
+        await client.query('DISCARD ALL');
       } catch {
         broken = true;
       }

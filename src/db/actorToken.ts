@@ -19,7 +19,16 @@ export interface SignOptions {
   secretHex?: string;
 }
 
-export const TOKEN_TTL_SECONDS = 300;
+/** Short on purpose: a token only has to survive from minting to BEGIN, and a leaked one is replayable until it expires. */
+export const TOKEN_TTL_SECONDS = 60;
+
+/** The database did not accept the actor token (key missing or rotated, expired, clock skew, wrong secret). */
+export class ActorContextError extends Error {
+  constructor() {
+    super('the database did not accept the actor token: check ACTOR_CONTEXT_SECRET / actor_key, and that app and database clocks agree');
+    this.name = 'ActorContextError';
+  }
+}
 
 /**
  * The database does not trust app.company_id / app.user_id any more. It trusts only this token:

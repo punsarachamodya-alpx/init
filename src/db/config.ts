@@ -33,3 +33,10 @@ export function actorSecretHex(): string {
   if (!/^[0-9a-f]{64,}$/i.test(secret)) throw new Error('ACTOR_CONTEXT_SECRET must be hex, at least 32 bytes');
   return secret.toLowerCase();
 }
+
+/** `set-actor-key` must never install the repo-known test secret anywhere but a test database. */
+export function assertProductionSecret(secretHex: string, env: { isTest: boolean } = { isTest }): void {
+  if (!env.isTest && secretHex.toLowerCase() === TEST_ACTOR_SECRET) {
+    throw new Error('refusing to use the repo-known test secret outside tests: generate a random ACTOR_CONTEXT_SECRET');
+  }
+}

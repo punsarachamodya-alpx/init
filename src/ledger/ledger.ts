@@ -196,7 +196,10 @@ export async function voidEvent(c: CompanyClient, eventId: string, input: { sour
   );
 }
 
-/** All events for a container in the order they were recorded, corrections included. */
+/**
+ * All events for a container in the order they were recorded, corrections included. Void rows carry the
+ * voided event's own `eventType`: consumers must filter on `correctionKind` (use `currentStatus` for status).
+ */
 export async function listEvents(c: CompanyClient, containerId: string): Promise<LedgerEvent[]> {
   const { rows } = await c.query<EventRow>(
     `SELECT ${EVENT_COLUMNS} FROM events WHERE container_id = $1 ORDER BY seq`,
