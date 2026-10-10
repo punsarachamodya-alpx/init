@@ -11,7 +11,7 @@ import {
   buildSuggestion,
   intake,
 } from '../src/intake/index.ts';
-import type { ExtractionInput, Extractor, RawExtraction } from '../src/intake/index.ts';
+import type { ExtractionInput, Extractor, MessagesClient, RawExtraction } from '../src/intake/index.ts';
 import { seedActor } from './helpers.ts';
 import type { TestActor } from './helpers.ts';
 
@@ -195,12 +195,12 @@ describe('ledger writes are only reachable through the confirmation module', () 
 
 describe('ClaudeExtractor request shape', () => {
   type Params = Record<string, unknown>;
-  const clientReturning = (response: unknown, spy: Params[] = []) => ({
+  const clientReturning = (response: unknown, spy: Params[] = []): MessagesClient => ({
     messages: {
       create: async (params: Params) => {
         spy.push(params);
         if (response instanceof Error) throw response;
-        return response;
+        return response as Awaited<ReturnType<MessagesClient['messages']['create']>>;
       },
     },
   });
@@ -237,7 +237,7 @@ describe('ClaudeExtractor request shape', () => {
   });
 
   test('the schema is closed: every field required and nullable', () => {
-    const s = EXTRACTION_JSON_SCHEMA as { additionalProperties: boolean; required: string[]; properties: { fields: { additionalProperties: boolean; required: string[]; properties: Record<string, { type: unknown }> } } };
+    const s = EXTRACTION_JSON_SCHEMA as unknown as { additionalProperties: boolean; required: string[]; properties: { fields: { additionalProperties: boolean; required: string[]; properties: Record<string, { type: unknown }> } } };
     expect(s.additionalProperties).toBe(false);
     expect(s.properties.fields.additionalProperties).toBe(false);
     expect([...s.properties.fields.required].sort()).toEqual([...FIELD_NAMES].sort());
