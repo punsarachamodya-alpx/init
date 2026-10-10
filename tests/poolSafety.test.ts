@@ -89,7 +89,7 @@ describe('the identity is checked before any work, and minted late', () => {
     await runScoped(SCOPE, async () => 'ok', pool);
     const token = String(params.find((p) => String(p[0]).startsWith('v1.'))![0]);
     const exp = Number(token.split('.')[3]);
-    expect(exp).toBeGreaterThanOrEqual(before + 1 + 59); // minted >= 1 s later than the start, with a 60 s life
+    expect(exp).toBeGreaterThanOrEqual(before + 1 + 60); // minted >= 1 s after the start (signing before connecting gives <= before + 60)
     expect(exp).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 60);
   });
 });
@@ -139,6 +139,8 @@ describe('the raw database layer is reachable only from src/db (lint)', () => {
     ['signing tokens', "import { signActor } from '../db/actorToken.ts';\nvoid signActor;\n"],
     ['reading config secrets', "import { actorSecretHex } from '../db/config.ts';\nvoid actorSecretHex;\n"],
     ['pg itself', "import pg from 'pg';\nvoid pg;\n"],
+    ['pg-pool', "import Pool from 'pg-pool';\nvoid Pool;\n"],
+    ['pg-boss', "import PgBoss from 'pg-boss';\nvoid PgBoss;\n"],
     ['dynamic import of the pool', "const m = await import('../db/pool.ts');\nvoid m;\n"],
   ];
   const ALLOWED: Array<[string, string]> = [
@@ -150,6 +152,7 @@ describe('the raw database layer is reachable only from src/db (lint)', () => {
   test.each(BANNED)('refused in application code: %s', async (_n, code) => {
     expect((await lint('src/ledger/example.ts', code)).length).toBeGreaterThan(0);
     expect((await lint('app/example.tsx', code)).length).toBeGreaterThan(0);
+    for (const ext of ['mts', 'cts', 'cjs']) expect((await lint(`src/ledger/example.${ext}`, code)).length).toBeGreaterThan(0);
   });
 
   test.each(ALLOWED)('allowed in application code: %s', async (_n, code) => {
@@ -157,8 +160,13 @@ describe('the raw database layer is reachable only from src/db (lint)', () => {
     expect(await lint('app/example.tsx', code)).toHaveLength(0);
   });
 
-  test.each(BANNED)('allowed inside src/db and tests: %s', async (_n, code) => {
-    expect(await lint('src/db/example.ts', code)).toHaveLength(0);
-    expect(await lint('tests/example.ts', code)).toHaveLength(0);
-  });
+  // ESLint reports no rule messages for ignored paths, so assert on the resolved config: the restriction is
+  // simply not configured for src/db and tests (and is configured for application code).
+  test.each([['src/db/example.ts', false], ['tests/example.ts', false], ['src/ledger/example.ts', true], ['app/example.tsx', true]] as const)(
+    'the import restriction applies to %s: %s',
+    async (file, applies) => {
+      const cfg = await new ESLint({ cwd: root }).calculateConfigForFile(path.join(root, file));
+      expect(Boolean(cfg?.rules?.['@typescript-eslint/no-restricted-imports'])).toBe(applies);
+    },
+  );
 });

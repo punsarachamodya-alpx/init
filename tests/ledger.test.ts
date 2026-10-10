@@ -103,7 +103,10 @@ describe('the ledger is append-only', () => {
   test('UPDATE, DELETE and TRUNCATE are denied to the table owner too (triggers)', async () => {
     await expect(owner.query("UPDATE events SET source_ref = 'x'")).rejects.toThrow(/append-only/);
     await expect(owner.query('DELETE FROM events')).rejects.toThrow(/append-only/);
-    await expect(owner.query('TRUNCATE events')).rejects.toThrow(/append-only/);
+    // CASCADE because intake_decisions references events: without it Postgres refuses first, for a different
+    // reason, and the trigger would go untested. If the trigger regressed this empties the test tables and the
+    // next test fails loudly.
+    await expect(owner.query('TRUNCATE events CASCADE')).rejects.toThrow(/append-only/);
   });
 
   test('the event row is unchanged after the failed attempts', async () => {

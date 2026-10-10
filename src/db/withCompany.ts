@@ -39,7 +39,9 @@ export async function runScoped<T>(
     if (!broken) {
       try {
         // Drops session state the callback may have left (settings, temp tables, prepared statements,
-        // advisory locks) before the connection is reused.
+        // advisory locks) before the connection is reused. Consequence: node-pg named prepared statements
+        // (`{ name, text }`) cannot be reused across callbacks (the client still caches the name, the server
+        // forgot it: 26000); use unnamed queries, or replace this with RESET ALL plus targeted cleanup.
         await client.query('DISCARD ALL');
       } catch {
         broken = true;

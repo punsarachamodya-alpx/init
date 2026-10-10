@@ -5,7 +5,7 @@ import tseslint from 'typescript-eslint';
 // `pg` itself are for src/db, tests and scripts only. Type-only imports are fine.
 const RAW_DB = {
   patterns: [
-    { group: ['pg'], allowTypeImports: true, message: 'Use withActor (src/db/withActor.ts), not the pg driver.' },
+    { group: ['pg', 'pg-pool', 'pg-boss'], allowTypeImports: true, message: 'Use withActor (src/db/withActor.ts), not a database driver or queue client.' },
     { group: ['**/db/pool*'], allowTypeImports: true, message: 'Use withActor (src/db/withActor.ts), not the raw pool.' },
     { group: ['**/db/withCompany*'], allowTypeImports: true, message: 'Use withActor; withCompany/runScoped are bootstrap internals of src/db.' },
     { group: ['**/db/actorToken*'], allowTypeImports: true, message: 'Only src/db may sign actor tokens.' },
@@ -17,18 +17,18 @@ export default tseslint.config(
   { ignores: ['node_modules', 'dist', 'coverage', '.next', 'scripts/**'] },
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.{ts,tsx,js,mjs}'],
+    files: ['**/*.{ts,tsx,mts,cts,js,mjs,cjs}'],
     ignores: ['src/db/**', 'tests/**', 'scripts/**', 'eslint.config.js', 'vitest.config.ts', 'playwright.config.ts'],
     rules: {
       '@typescript-eslint/no-restricted-imports': ['error', RAW_DB],
       'no-restricted-syntax': [
         'error',
         {
-          selector: "ImportExpression[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg$/]",
+          selector: "ImportExpression[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg(-pool|-boss)?$/]",
           message: 'Do not import the raw database layer dynamically; use withActor.',
         },
         {
-          selector: "ExportNamedDeclaration[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg$/]",
+          selector: "ExportNamedDeclaration[source.value=/\\/db\\/(pool|withCompany|actorToken|config)|^pg(-pool|-boss)?$/]",
           message: 'Do not re-export the raw database layer.',
         },
       ],

@@ -6,7 +6,7 @@ import { closeAppPool } from '../src/db/pool.ts';
 import { withActor } from '../src/db/withActor.ts';
 import { ConfirmationError, buildSuggestion, confirmSuggestion, intake } from '../src/intake/index.ts';
 import type { Extractor, RawExtraction, Suggestion } from '../src/intake/index.ts';
-import { createContainer, listEvents, voidEvent } from '../src/ledger/ledger.ts';
+import { appendCorrection, createContainer, listEvents, voidEvent } from '../src/ledger/ledger.ts';
 import { newBl, seedActor } from './helpers.ts';
 import type { TestActor } from './helpers.ts';
 
@@ -128,6 +128,28 @@ describe('confirmation is the only way into the ledger', () => {
     await expect(
       withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } })),
     ).rejects.toMatchObject({ code: 'duplicate' });
+  });
+
+  test('a replaced event still holds its evidence: only a void releases it', async () => {
+    const s = await suggest(cha, DO_RAW());
+    const first = await withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } }));
+    // replace with manual evidence: the original is hidden, the replacement carries no message id
+    const replacement = await withActor(cha, (c) =>
+      appendCorrection(c, first.event.id, {
+        containerId: first.container.id,
+        eventType: 'cusdec_lodged',
+        occurredAt: new Date('2026-10-12T06:00:00Z'),
+        source: { type: 'person', ref: 'ops' },
+        evidence: { type: 'manual', note: 'time corrected by phone' },
+      }),
+    );
+    await expect(
+      withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } })),
+    ).rejects.toMatchObject({ code: 'duplicate' });
+    // voiding the replacement ends the chain in a void, which releases the evidence
+    await withActor(cha, (c) => voidEvent(c, replacement.id, { source: { type: 'person', ref: 'ops' }, evidence: { type: 'manual', note: 'wrong container' } }));
+    const again = await withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } }));
+    expect(again.event.id).not.toBe(first.event.id);
   });
 
   test('the confirmer supplies the event time when the suggestion has none', async () => {

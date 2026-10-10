@@ -202,7 +202,8 @@ export function suggestOccurredAt(eventType: EventType | null, fields: Fields): 
   }
 }
 
-function confirmableBy(eventType: EventType | null) {
+/** Roles whose permission matrix lets them record this event type. */
+export function rolesFor(eventType: EventType | null) {
   return eventType ? ROLES.filter((r) => eventAllowed(r, eventType)) : [];
 }
 
@@ -247,7 +248,7 @@ export function buildSuggestion(raw: RawExtraction, input: ExtractionInput, evid
     fields,
     issues,
     suggestedOccurredAt: suggestOccurredAt(eventType, fields),
-    confirmableBy: rejected ? [] : confirmableBy(eventType),
+    confirmableBy: rejected ? [] : rolesFor(eventType),
     evidence,
   };
 }
