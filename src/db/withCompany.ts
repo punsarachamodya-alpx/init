@@ -16,6 +16,7 @@ export async function runScoped<T>(
 ): Promise<T> {
   const token = signActor(scope); // validates the ids
   const client = await pool.connect();
+  let broken = false; // a connection in an unknown state is destroyed, never returned to the pool
   try {
     await client.query('BEGIN');
     await client.query("SELECT set_config('app.actor', $1, true)", [token]);
@@ -23,10 +24,22 @@ export async function runScoped<T>(
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      broken = true;
+    }
     throw err;
   } finally {
-    client.release();
+    if (!broken) {
+      try {
+        // Drops any session-level setting the callback made (set_config(..., false)) before reuse.
+        await client.query('RESET ALL');
+      } catch {
+        broken = true;
+      }
+    }
+    client.release(broken ? true : undefined);
   }
 }
 
