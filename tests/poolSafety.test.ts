@@ -2,6 +2,7 @@ import path from 'node:path';
 import { ESLint } from 'eslint';
 import pg from 'pg';
 import { afterAll, describe, expect, test } from 'vitest';
+import { ActorContextError } from '../src/db/actorToken.ts';
 import { dbUrl } from '../src/db/config.ts';
 import { withActor } from '../src/db/withActor.ts';
 import { runScoped } from '../src/db/withCompany.ts';
@@ -10,35 +11,42 @@ import { seedActor } from './helpers.ts';
 const SCOPE = { companyId: '00000000-0000-4000-8000-0000000000c1', userId: '00000000-0000-4000-8000-0000000000e1' };
 
 /** A fake pool whose single client records every query and the argument of release(). */
-function fakePool(opts: { failOn?: string } = {}) {
+function fakePool(opts: { failOn?: string; connectDelayMs?: number; rejectToken?: boolean } = {}) {
   const queries: string[] = [];
+  const params: unknown[][] = [];
   const releases: unknown[] = [];
   const client = {
-    query: async (sql: string) => {
+    query: async (sql: string, p: unknown[] = []) => {
       const verb = sql.trim().split(/\s+/).slice(0, 2).join(' ');
       queries.push(verb);
+      params.push(p);
       if (opts.failOn && sql.startsWith(opts.failOn)) throw new Error(`${opts.failOn} failed`);
+      if (sql.startsWith('SELECT app_company_id()')) return { rows: [{ company: opts.rejectToken ? null : SCOPE.companyId }], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     },
     release: (arg?: unknown) => {
       releases.push(arg);
     },
   };
-  return { pool: { connect: async () => client } as unknown as pg.Pool, queries, releases };
+  const connect = async () => {
+    if (opts.connectDelayMs) await new Promise((r) => setTimeout(r, opts.connectDelayMs));
+    return client;
+  };
+  return { pool: { connect } as unknown as pg.Pool, queries, params, releases };
 }
 
 describe('connections go back to the pool clean, or not at all', () => {
-  test('success path: BEGIN, token, COMMIT, RESET ALL, then a normal release', async () => {
+  test('success path: BEGIN, token, token check, COMMIT, DISCARD ALL, then a normal release', async () => {
     const { pool, queries, releases } = fakePool();
     await runScoped(SCOPE, async () => 'ok', pool);
-    expect(queries).toEqual(['BEGIN', 'SELECT set_config(\'app.actor\',', 'COMMIT', 'RESET ALL']);
+    expect(queries).toEqual(['BEGIN', 'SELECT set_config(\'app.actor\',', 'SELECT app_company_id()', 'COMMIT', 'DISCARD ALL']);
     expect(releases).toEqual([undefined]);
   });
 
-  test('error path: ROLLBACK, RESET ALL, normal release, error rethrown', async () => {
+  test('error path: ROLLBACK, DISCARD ALL, normal release, error rethrown', async () => {
     const { pool, queries, releases } = fakePool();
     await expect(runScoped(SCOPE, async () => { throw new Error('boom'); }, pool)).rejects.toThrow('boom');
-    expect(queries.slice(-2)).toEqual(['ROLLBACK', 'RESET ALL']);
+    expect(queries.slice(-2)).toEqual(['ROLLBACK', 'DISCARD ALL']);
     expect(releases).toEqual([undefined]);
   });
 
@@ -48,10 +56,41 @@ describe('connections go back to the pool clean, or not at all', () => {
     expect(releases).toEqual([true]);
   });
 
-  test('a failed RESET ALL destroys the connection too', async () => {
-    const { pool, releases } = fakePool({ failOn: 'RESET ALL' });
+  test('a failed DISCARD ALL destroys the connection too', async () => {
+    const { pool, releases } = fakePool({ failOn: 'DISCARD ALL' });
     await runScoped(SCOPE, async () => 'ok', pool);
     expect(releases).toEqual([true]);
+  });
+});
+
+describe('the identity is checked before any work, and minted late', () => {
+  test('a token the database rejects raises a clear error instead of silently returning nothing', async () => {
+    const { pool, queries, releases } = fakePool({ rejectToken: true });
+    await expect(runScoped(SCOPE, async () => 'never', pool)).rejects.toBeInstanceOf(ActorContextError);
+    expect(queries).not.toContain('COMMIT');
+    expect(releases).toEqual([undefined]); // rolled back and released cleanly
+  });
+
+  test('the real database refuses a token signed with the wrong secret, loudly', async () => {
+    const actor = await seedActor('cha');
+    const saved = process.env.ACTOR_CONTEXT_SECRET;
+    process.env.ACTOR_CONTEXT_SECRET = 'cd'.repeat(32);
+    try {
+      await expect(withActor(actor, async () => 'never')).rejects.toBeInstanceOf(ActorContextError);
+    } finally {
+      if (saved === undefined) delete process.env.ACTOR_CONTEXT_SECRET;
+      else process.env.ACTOR_CONTEXT_SECRET = saved;
+    }
+  });
+
+  test('the token is minted after the connection is obtained, so a long pool wait cannot expire it', async () => {
+    const { pool, params } = fakePool({ connectDelayMs: 1500 });
+    const before = Math.floor(Date.now() / 1000);
+    await runScoped(SCOPE, async () => 'ok', pool);
+    const token = String(params.find((p) => String(p[0]).startsWith('v1.'))![0]);
+    const exp = Number(token.split('.')[3]);
+    expect(exp).toBeGreaterThanOrEqual(before + 1 + 59); // minted >= 1 s later than the start, with a 60 s life
+    expect(exp).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 60);
   });
 });
 
@@ -71,21 +110,55 @@ describe('session-level settings cannot leak to the next user of a pooled connec
   });
 });
 
-describe('only src/db may reach for the raw application pool', () => {
-  const root = path.resolve(import.meta.dirname, '..');
-  const lint = async (filePath: string) => {
-    const eslint = new ESLint({ cwd: root });
-    const [res] = await eslint.lintText("import { getAppPool } from '../db/pool.ts';\nvoid getAppPool;\n", { filePath: path.join(root, filePath) });
-    return res!.messages.filter((m) => m.ruleId === 'no-restricted-syntax');
-  };
-
-  test('application code outside src/db is refused', async () => {
-    expect(await lint('src/ledger/example.ts')).toHaveLength(1);
-    expect(await lint('src/intake/example.ts')).toHaveLength(1);
+describe('DISCARD ALL drops temp tables and settings before reuse (a role that can create them)', () => {
+  let ownerOne: pg.Pool | undefined;
+  afterAll(async () => {
+    await ownerOne?.end();
   });
 
-  test('src/db and tests may use it', async () => {
-    expect(await lint('src/db/example.ts')).toHaveLength(0);
-    expect(await lint('tests/example.ts')).toHaveLength(0);
+  test('a temp table made inside the callback is gone for the next user of the same connection', async () => {
+    ownerOne = new pg.Pool({ connectionString: dbUrl('OWNER_DATABASE_URL'), max: 1 });
+    await runScoped({ companyId: SCOPE.companyId }, (c) => c.query('CREATE TEMP TABLE leaked (x int)'), ownerOne);
+    await expect(ownerOne.query('SELECT * FROM leaked')).rejects.toThrow(/does not exist/);
+  });
+});
+
+describe('the raw database layer is reachable only from src/db (lint)', () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const lint = async (filePath: string, code: string) => {
+    const eslint = new ESLint({ cwd: root });
+    const [res] = await eslint.lintText(code, { filePath: path.join(root, filePath) });
+    return res!.messages.filter((m) => /no-restricted-(imports|syntax)/.test(m.ruleId ?? ''));
+  };
+  const BANNED: Array<[string, string]> = [
+    ['named import of the pool', "import { getAppPool } from '../db/pool.ts';\nvoid getAppPool;\n"],
+    ['namespace import of the pool', "import * as p from '../db/pool.ts';\nvoid p;\n"],
+    ['re-export of the pool', "export { getAppPool } from '../db/pool.ts';\n"],
+    ['runScoped', "import { runScoped } from '../db/withCompany.ts';\nvoid runScoped;\n"],
+    ['withCompany', "import { withCompany } from '../db/withCompany.ts';\nvoid withCompany;\n"],
+    ['signing tokens', "import { signActor } from '../db/actorToken.ts';\nvoid signActor;\n"],
+    ['reading config secrets', "import { actorSecretHex } from '../db/config.ts';\nvoid actorSecretHex;\n"],
+    ['pg itself', "import pg from 'pg';\nvoid pg;\n"],
+    ['dynamic import of the pool', "const m = await import('../db/pool.ts');\nvoid m;\n"],
+  ];
+  const ALLOWED: Array<[string, string]> = [
+    ['withActor', "import { withActor } from '../db/withActor.ts';\nvoid withActor;\n"],
+    ['type-only CompanyClient', "import type { CompanyClient } from '../db/withCompany.ts';\nexport type X = CompanyClient;\n"],
+    ['type-only pg', "import type pg from 'pg';\nexport type Y = pg.Pool;\n"],
+  ];
+
+  test.each(BANNED)('refused in application code: %s', async (_n, code) => {
+    expect((await lint('src/ledger/example.ts', code)).length).toBeGreaterThan(0);
+    expect((await lint('app/example.tsx', code)).length).toBeGreaterThan(0);
+  });
+
+  test.each(ALLOWED)('allowed in application code: %s', async (_n, code) => {
+    expect(await lint('src/ledger/example.ts', code)).toHaveLength(0);
+    expect(await lint('app/example.tsx', code)).toHaveLength(0);
+  });
+
+  test.each(BANNED)('allowed inside src/db and tests: %s', async (_n, code) => {
+    expect(await lint('src/db/example.ts', code)).toHaveLength(0);
+    expect(await lint('tests/example.ts', code)).toHaveLength(0);
   });
 });

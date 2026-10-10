@@ -78,19 +78,25 @@ describe('ledger order and time cannot be forged', () => {
     ).rejects.toThrow(/unique|duplicate/);
   });
 
-  test('an event cannot supersede itself, and status stays defined', async () => {
-    await expect(
-      asOwner((c) =>
+  test('an event cannot supersede itself (the CHECK itself, with row-level security out of the way)', async () => {
+    const c = await owner.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query("SELECT set_config('app.actor', $1, true)", [signActor({ companyId, userId: cha.userId })]);
+      await c.query('ALTER TABLE events NO FORCE ROW LEVEL SECURITY'); // DDL is transactional: rolled back below
+      await expect(
         c.query(
           `INSERT INTO events (id, corrects_event_id, ${RAW_COLS}) VALUES ('22222222-2222-4222-8222-222222222222', '22222222-2222-4222-8222-222222222222', ${RAW_VALS})`,
           [companyId, containerId],
         ),
-      ),
-    ).rejects.toThrow(/row-level security|check constraint/); // the policy refuses first (the target does not exist yet)
-    const def = await getAppPool().query<{ def: string }>(
-      "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'events_no_self_correction'",
-    );
-    expect(def.rows[0]?.def).toMatch(/corrects_event_id IS DISTINCT FROM id/); // and the constraint backs it up for any role
+      ).rejects.toThrow(/events_no_self_correction/);
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      c.release();
+    }
+  });
+
+  test('...and through the ledger path the container keeps a defined status', async () => {
     const fresh = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
     await withActor(cha, (c) => appendEvent(c, base({ containerId: fresh })));
     expect((await withActor(cha, (c) => currentStatus(c, fresh)))!.eventType).toBe('do_received');

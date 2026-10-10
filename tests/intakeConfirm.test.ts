@@ -6,7 +6,7 @@ import { closeAppPool } from '../src/db/pool.ts';
 import { withActor } from '../src/db/withActor.ts';
 import { ConfirmationError, buildSuggestion, confirmSuggestion, intake } from '../src/intake/index.ts';
 import type { Extractor, RawExtraction, Suggestion } from '../src/intake/index.ts';
-import { createContainer, listEvents } from '../src/ledger/ledger.ts';
+import { createContainer, listEvents, voidEvent } from '../src/ledger/ledger.ts';
 import { newBl, seedActor } from './helpers.ts';
 import type { TestActor } from './helpers.ts';
 
@@ -113,6 +113,18 @@ describe('confirmation is the only way into the ledger', () => {
   test('confirming the same evidence twice is refused', async () => {
     const s = await suggest(cha, DO_RAW());
     await withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } }));
+    await expect(
+      withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } })),
+    ).rejects.toMatchObject({ code: 'duplicate' });
+  });
+
+  test('after a wrong event is voided, the same evidence can be confirmed again with corrected values', async () => {
+    const s = await suggest(cha, DO_RAW());
+    const first = await withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } }));
+    await withActor(cha, (c) => voidEvent(c, first.event.id, { source: { type: 'person', ref: 'ops' }, evidence: s.evidence }));
+    const again = await withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: new Date('2026-10-12T06:00:00Z'), fields: { ...s.fields } }));
+    expect(again.event.id).not.toBe(first.event.id);
+    // ...but two live events from the same evidence are still refused
     await expect(
       withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...s.fields } })),
     ).rejects.toMatchObject({ code: 'duplicate' });

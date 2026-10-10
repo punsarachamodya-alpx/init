@@ -196,6 +196,34 @@ describe('ordinary corrections are marked and no longer fail open', () => {
   });
 });
 
+describe('voids and replacements interact predictably', () => {
+  test('voiding a replacement hides both it and the original it replaced (documented behaviour)', async () => {
+    const id = await shared();
+    const e = await record(cha, id, 'do_received');
+    const r = await withActor(cha, (c) => appendCorrection(c, e.id, { containerId: id, eventType: 'do_received', occurredAt: new Date(), source, evidence: manual('time fixed') }));
+    await withActor(cha, (c) => voidEvent(c, r.id, { source, evidence: manual('the fix was wrong too') }));
+    expect(await status(cha, id)).toBeNull();
+  });
+
+  test('status follows the chain after a void and a later event', async () => {
+    const id = await shared();
+    await record(haulierA, id, 'gate_pass');
+    const falseDelivered = await record(haulierA, id, 'delivered');
+    await withActor(cha, (c) => voidEvent(c, falseDelivered.id, { source, evidence: manual('not delivered') }));
+    expect((await status(cha, id))!.eventType).toBe('gate_pass');
+    await record(haulierA, id, 'picked_up');
+    expect((await status(cha, id))!.eventType).toBe('picked_up');
+  });
+
+  test('listEvents includes void rows; consumers filter on correctionKind', async () => {
+    const id = await shared();
+    const e = await record(cha, id, 'do_received');
+    await withActor(cha, (c) => voidEvent(c, e.id, { source, evidence: manual('wrong') }));
+    const all = await withActor(cha, (c) => listEvents(c, id));
+    expect(all.map((x) => x.correctionKind)).toEqual([null, 'void']);
+  });
+});
+
 describe('seedMessage still works as evidence for voids', () => {
   test('a void can cite a stored message', async () => {
     const id = await shared();

@@ -24,6 +24,7 @@ const VALID: Array<[string, Record<string, unknown>]> = [
   ['note', { note: 'truck delayed at gate' }],
   ['note at the limit', { note: 'x'.repeat(140) }],
   ['reference at the limit', { reference: 'R'.repeat(64) }],
+  ['note of 140 emoji (code points, not UTF-16 units)', { note: '\u{1F600}'.repeat(140) }],
   ['several keys', { yard: 'RCT', result: 'red', scheduled_at: Z, reference: 'ESLCMB000103', note: 'ok' }],
 ];
 const INVALID: Array<[string, unknown]> = [
@@ -43,6 +44,7 @@ const INVALID: Array<[string, unknown]> = [
   ['reference empty', { reference: '' }],
   ['reference too long', { reference: 'R'.repeat(65) }],
   ['note too long', { note: 'x'.repeat(141) }],
+  ['note of 141 emoji', { note: '\u{1F600}'.repeat(141) }],
   ['number value', { note: 1200 }],
   ['boolean value', { result: true }],
   ['null value', { yard: null }],
