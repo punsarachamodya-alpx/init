@@ -111,15 +111,16 @@ describe('the ledger is append-only', () => {
   });
 
   test('a correction must reference an event of the same container and company', async () => {
-    const other = await withCompany(companyId, (c) => createContainer(c, { containerNo: 'ZZZU2345670' }));
+    const other = await withCompany(companyId, (c) => createContainer(c, { containerNo: validContainerNo() }));
+    const fresh = await withCompany(companyId, (c) => appendEvent(c, input(containerId, 'cusdec_lodged')));
     await expect(
-      withCompany(companyId, (c) => appendCorrection(c, eventId, input(other.id, 'do_received', { evidence: { type: 'manual', note: 'wrong container' } }))),
+      withCompany(companyId, (c) => appendCorrection(c, fresh.id, input(other.id, 'cusdec_lodged', { evidence: { type: 'manual', note: 'wrong container' } }))),
     ).rejects.toThrow(/foreign key/);
     await expect(
       withCompany(companyId, (c) => appendCorrection(c, '11111111-1111-4111-8111-111111111111', input(containerId, 'do_received', { evidence: { type: 'manual', note: 'missing' } }))),
     ).rejects.toThrow(/foreign key/);
     await expect(
-      withCompany(otherCompanyId, (c) => appendCorrection(c, eventId, input(containerId, 'do_received', { evidence: { type: 'manual', note: 'cross tenant' } }))),
+      withCompany(otherCompanyId, (c) => appendCorrection(c, fresh.id, input(containerId, 'cusdec_lodged', { evidence: { type: 'manual', note: 'cross tenant' } }))),
     ).rejects.toThrow(/foreign key|row-level security/);
   });
 });
