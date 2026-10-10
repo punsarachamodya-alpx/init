@@ -1,0 +1,21 @@
+{
+  "status.vessel_discharged": "නෞකාවෙන් බාන ලදී",
+  "status.do_received": "බෙදාහැරීමේ නියෝගය (DO) ලැබුණි",
+  "status.cusdec_lodged": "රේගු ප්‍රකාශනය (CusDec) ඉදිරිපත් කළා",
+  "status.channel_assigned": "චැනලය ලබා දුන්නා",
+  "status.exam": "පරීක්ෂාව",
+  "status.release_advice": "නිදහස් කළා (බෙදාහැරීමේ උපදෙස)",
+  "status.gate_pass": "ගේට් පාස්",
+  "status.truck_dispatched": "ට්‍රක් රථය යවන ලදී",
+  "status.picked_up": "රැගෙන ගියා",
+  "status.delivered": "භාර දුන්නා",
+  "status.empty_returned": "හිස් බහාලුම ආපසු භාර දුන්නා",
+  "notify.client_status.subject": "කන්ටේනරය {container}: {status}",
+  "notify.client_status.text": "කන්ටේනරය {container} යාවත්කාලීන කිරීම: {status}.",
+  "notify.haulier_assigned.subject": "නව කාර්යය: {container}",
+  "notify.haulier_assigned.text": "කන්ටේනරය {container} ඔබට පවරා ඇත. රැගෙන යාමට පෙර නිදහස් කරන තෙක් රැඳී සිටින්න.",
+  "notify.haulier_cleared.subject": "නිදහස් කළා: {container}",
+  "notify.haulier_cleared.text": "කන්ටේනරය {container} රැගෙන යාමට නිදහස් කර ඇත. යාමට පෙර ගේට් පාස් පරීක්ෂා කරන්න.",
+  "notify.suggestion_reminder.subject": "තහවුරු කිරීමට යෝජනා",
+  "notify.suggestion_reminder.text": "තහවුරු කිරීමට යෝජිත යාවත්කාලීන {count}ක් බලා සිටී."
+}

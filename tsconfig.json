@@ -13,6 +13,7 @@
     "rewriteRelativeImportExtensions": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
     "allowJs": true,
     "checkJs": false
   },

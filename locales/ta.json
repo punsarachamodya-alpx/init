@@ -1,0 +1,21 @@
+{
+  "status.vessel_discharged": "கப்பலிலிருந்து இறக்கப்பட்டது",
+  "status.do_received": "டெலிவரி ஆர்டர் (DO) கிடைத்தது",
+  "status.cusdec_lodged": "சுங்க அறிவிப்பு (CusDec) சமர்ப்பிக்கப்பட்டது",
+  "status.channel_assigned": "சேனல் ஒதுக்கப்பட்டது",
+  "status.exam": "பரிசோதனை",
+  "status.release_advice": "விடுவிக்கப்பட்டது (டெலிவரி அறிவுறுத்தல்)",
+  "status.gate_pass": "கேட் பாஸ்",
+  "status.truck_dispatched": "டிரக் அனுப்பப்பட்டது",
+  "status.picked_up": "எடுத்துச் செல்லப்பட்டது",
+  "status.delivered": "ஒப்படைக்கப்பட்டது",
+  "status.empty_returned": "வெற்றுக் கொள்கலன் திருப்பி ஒப்படைக்கப்பட்டது",
+  "notify.client_status.subject": "கொள்கலன் {container}: {status}",
+  "notify.client_status.text": "கொள்கலன் {container} புதுப்பிப்பு: {status}.",
+  "notify.haulier_assigned.subject": "புதிய பணி: {container}",
+  "notify.haulier_assigned.text": "கொள்கலன் {container} உங்களுக்கு ஒதுக்கப்பட்டுள்ளது. எடுப்பதற்கு முன் விடுவிப்பு வரும் வரை காத்திருக்கவும்.",
+  "notify.haulier_cleared.subject": "விடுவிக்கப்பட்டது: {container}",
+  "notify.haulier_cleared.text": "கொள்கலன் {container} எடுத்துச் செல்ல விடுவிக்கப்பட்டுள்ளது. செல்வதற்கு முன் கேட் பாஸைச் சரிபார்க்கவும்.",
+  "notify.suggestion_reminder.subject": "உறுதிப்படுத்த வேண்டிய பரிந்துரைகள்",
+  "notify.suggestion_reminder.text": "உறுதிப்படுத்த {count} பரிந்துரைக்கப்பட்ட புதுப்பிப்புகள் காத்திருக்கின்றன."
+}

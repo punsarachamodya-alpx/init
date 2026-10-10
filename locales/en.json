@@ -1,0 +1,21 @@
+{
+  "status.vessel_discharged": "Vessel discharged",
+  "status.do_received": "DO received",
+  "status.cusdec_lodged": "CusDec lodged",
+  "status.channel_assigned": "Channel assigned",
+  "status.exam": "Examination",
+  "status.release_advice": "Released (delivery advice)",
+  "status.gate_pass": "Gate pass",
+  "status.truck_dispatched": "Truck dispatched",
+  "status.picked_up": "Picked up",
+  "status.delivered": "Delivered",
+  "status.empty_returned": "Empty returned",
+  "notify.client_status.subject": "Container {container}: {status}",
+  "notify.client_status.text": "Container {container} update: {status}.",
+  "notify.haulier_assigned.subject": "New job: {container}",
+  "notify.haulier_assigned.text": "Container {container} has been assigned to you. Wait for the release before collecting.",
+  "notify.haulier_cleared.subject": "Cleared: {container}",
+  "notify.haulier_cleared.text": "Container {container} is cleared for collection. Check the gate pass before you go.",
+  "notify.suggestion_reminder.subject": "Suggestions waiting",
+  "notify.suggestion_reminder.text": "{count} suggested updates are waiting for you to confirm."
+}

@@ -146,7 +146,9 @@ describe('the application role cannot escape row-level security', () => {
       `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
        WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname NOT IN ('schema_migrations', 'actor_key')`,
     );
-    expect(rows.map((r) => r.relname).sort()).toEqual([...TABLES, 'container_access', 'intake_suggestions', 'intake_decisions'].sort());
+    expect(rows.map((r) => r.relname).sort()).toEqual(
+      [...TABLES, 'container_access', 'intake_suggestions', 'intake_decisions', 'user_contacts', 'notifications', 'notification_attempts'].sort(),
+    );
     for (const r of rows) expect(r).toMatchObject({ relrowsecurity: true, relforcerowsecurity: true });
   });
 });

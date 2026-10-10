@@ -19,6 +19,7 @@ export const EVENT_TYPES = [
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
+export const isEventType = (v: unknown): v is EventType => typeof v === 'string' && (EVENT_TYPES as readonly string[]).includes(v);
 
 export const EXAM_YARDS = ['RCT', 'Grayline 1', 'Grayline 2'] as const;
 
