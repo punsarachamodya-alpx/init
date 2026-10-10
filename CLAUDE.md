@@ -11,14 +11,15 @@ Stack: TypeScript, Next.js (App Router), PostgreSQL with row-level security, pg-
 - `pnpm e2e` - Playwright end-to-end tests
 - `pnpm typecheck` - `tsc --noEmit`
 - `pnpm lint` - lint
+- `pnpm set-actor-key` - once per environment as the owner role (`OWNER_DATABASE_URL`, `ACTOR_CONTEXT_SECRET`): provision or rotate the key the database verifies actor tokens against
 - `pnpm db:migrate` - apply new migrations as the owner role (`OWNER_DATABASE_URL`); the app connects as `colombo_app` (`APP_DATABASE_URL`)
 - `pnpm eval:intake` - score extraction against fixtures/labels.json; needs `ANTHROPIC_API_KEY` and spends API credit. `--dry-run=oracle|flawed` checks the scorer with a fake extractor (not a model result)
 - `node scripts/check-iso6346.mjs <container_no...>` - validate container number check digits
 
 ## Rules
 - The event ledger is append-only. Never UPDATE or DELETE event rows. Corrections are new events that reference the one they correct.
-- Every table has `company_id`, and row-level security enforces it. No query runs without an acting user and company (`withActor`); `withCompany` is for bootstrap only (creating a company and its first users), and the code that builds an Actor must take both ids from a verified session: the database trusts them. Roles come from the `users` table, never from the caller.
-- Hauliers read events of their assigned containers. Anything commercial (freight, demurrage estimate, tariffs, pricing) goes in tables whose policies require `cha_ops` or `client`, and never in event `payload` (key whitelist).
+- Every table has `company_id`, and row-level security enforces it. No query runs without an acting user and company (`withActor`); `withCompany` is for bootstrap only (creating a company and its first users). Identity reaches the database as a signed, short-lived actor token (`src/db/actorToken.ts`, secret `ACTOR_CONTEXT_SECRET`): only the code that builds an Actor may mint one, and it must take both ids from a verified session, never from request input. Application code outside `src/db` must not use `getAppPool` (lint rule). Roles come from the `users` table, never from the caller.
+- Hauliers read events of their assigned containers. Anything commercial (freight, demurrage estimate, tariffs, pricing) goes in tables whose policies require `cha_ops` or `client`, and never in event `payload`, `note`, `reference` or `evidence_note` (the payload has a key whitelist and value rules; free text is human-entered and hauliers can read it). A false event is undone with a void correction (`voidEvent`), never by deleting.
 - Tests use `/fixtures/synthetic` only. Never put real driver, company, container or document data in the repo.
 - Extraction from messages and documents is a suggestion. A person confirms every extracted field before it becomes an event. Only `src/intake/confirm.ts` may write the ledger from intake. Model output is checked by trusted code (ISO 6346, grounding in the source text); send only synthetic data to the API.
 - Every status change records its source (who or what) and evidence (message id, document id, or manual entry).
