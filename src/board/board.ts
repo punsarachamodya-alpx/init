@@ -61,8 +61,8 @@ const rank = (s: EventType | null) => (s === null ? -1 : EVENT_TYPES.indexOf(s))
 /**
  * One row per container the acting user can see, furthest status first, oldest in status first within a status.
  * The shape depends on the database, not on the caller: row-level security decides which containers and events are
- * visible and which evidence text can be read (only the recording company's own messages and documents), and
- * hauliers additionally get no BL number and no evidence detail beyond its type and source.
+ * visible and which evidence text can be read (only the viewing company's own messages and documents); hauliers
+ * additionally get no BL number.
  */
 export async function loadBoard(c: CompanyClient, now: Date): Promise<BoardRow[]> {
   const { rows } = await c.query<Row>(
@@ -97,7 +97,7 @@ export async function loadBoard(c: CompanyClient, now: Date): Promise<BoardRow[]
             recordedByOwnCompany: last.recorded_by_company_id === r.my_company_id,
             evidence: {
               kind: last.evidence_type!,
-              excerpt: haulier ? null : last.excerpt,
+              excerpt: last.excerpt,
               note: last.evidence_note,
             },
           }
@@ -168,7 +168,7 @@ export async function loadTimeline(c: CompanyClient, containerId: string, now: D
     recordedAt: r.recorded_at,
     source: { type: r.source_type, ref: r.source_ref },
     recordedByOwnCompany: r.recorded_by_company_id === r.my_company_id,
-    evidence: { kind: r.evidence_type, excerpt: r.my_role === 'haulier_dispatcher' ? null : r.excerpt, note: r.evidence_note },
+    evidence: { kind: r.evidence_type, excerpt: r.excerpt, note: r.evidence_note },
     kind: r.correction_kind === 'void' ? 'void_row' : voided.has(r.id) ? 'voided' : corrected.has(r.id) ? 'replaced' : 'live',
     spentMs: null,
   }));

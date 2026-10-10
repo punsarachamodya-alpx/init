@@ -107,12 +107,19 @@ describe('role shaping comes from the database', () => {
     expect(board[0]!.lastChange!.evidence.excerpt).toBeNull();
   });
 
-  test('the haulier sees only its job and no BL number, and never evidence text', async () => {
+  test('the haulier sees only its job and no BL number; evidence text only where it owns the message', async () => {
     const board = await withActor(haulier, (c) => loadBoard(c, NOW));
     expect(board.map((r) => r.containerNo)).toEqual([no.late]);
     expect(board[0]).toMatchObject({ blNo: null, owned: false });
     expect(board[0]!.lastChange!.evidence.excerpt).toBeNull();
     expect(JSON.stringify(board)).not.toMatch(/private to the CHA/);
+    // its own message is readable to it (row-level security: evidence text belongs to the company that holds it)
+    const own = await seedMessage(haulier, 'Gate pass shown at 09:00, driver waiting');
+    await ev(haulier, id.late, 'truck_dispatched', '2026-10-19T04:00:00Z', { type: 'message', messageId: own });
+    const after = await withActor(haulier, (c) => loadBoard(c, NOW));
+    expect(after[0]!.lastChange!.evidence).toMatchObject({ kind: 'message', excerpt: expect.stringContaining('driver waiting') });
+    const forCha = await withActor(cha, (c) => loadBoard(c, NOW));
+    expect(forCha.find((r) => r.containerNo === no.late)!.lastChange!.evidence.excerpt).toBeNull(); // not the CHA's to read
   });
 });
 
@@ -143,10 +150,10 @@ describe('the container timeline', () => {
     expect(t.filter((e) => e.kind !== 'live').every((e) => e.spentMs === null)).toBe(true);
   });
 
-  test('the haulier\'s timeline carries no evidence text', async () => {
+  test('the haulier\'s timeline carries no text from the CHA\'s messages', async () => {
     const t = await withActor(haulier, (c) => loadTimeline(c, id.late, NOW));
     expect(t.length).toBeGreaterThan(0);
-    expect(t.every((e) => e.evidence.excerpt === null)).toBe(true);
+    expect(JSON.stringify(t)).not.toMatch(/private to the CHA/);
   });
 });
 
