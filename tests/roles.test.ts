@@ -117,6 +117,21 @@ describe('who may record which stage', () => {
     await expect(ev(cha2, id, 'release_advice')).rejects.toThrow(/row-level security|foreign key/);
   });
 
+  test('a raw insert naming the owning CHA is refused without an active grant (policy, not just the FK)', async () => {
+    const id = await sharedContainer();
+    const raw = (actor: TestActor, eventType: string) =>
+      withActor(actor, (c) =>
+        c.query(
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note)
+           VALUES ($1, $2, $3, now(), 'person', 'u', 'manual', 'n')`,
+          [cha.companyId, id, eventType],
+        ),
+      );
+    await expect(raw(haulierB, 'gate_pass')).rejects.toThrow(/row-level security/);
+    await expect(raw(cha2, 'release_advice')).rejects.toThrow(/row-level security/);
+    await expect(raw(haulierA, 'gate_pass')).resolves.toBeTruthy(); // control: the assigned haulier passes
+  });
+
   test('revoking a haulier stops it recording as well as reading', async () => {
     const h = await seedActor('haulier');
     const id = await withActor(cha, async (c) => {
