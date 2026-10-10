@@ -13,7 +13,7 @@ Every user belongs to one company (`company_id`). Roles:
 | Role | Who | Can do |
 |---|---|---|
 | `cha_ops` | Clearing agent staff | See all containers of their clients; confirm any clearance stage; assign hauliers; manage tariff rates. |
-| `client` | Importer/exporter staff | See their own containers; confirm clearance stages (DO received etc.) for their own cargo. |
+| `client` | Importer/exporter staff | See the containers the CHA has shared with them; confirm clearance stages (DO received etc.) on those. |
 | `haulier_dispatcher` | Haulier staff | See only jobs assigned to their company; confirm trucking stages (gate pass, dispatched, picked up, delivered, empty returned). |
 | `driver` | Haulier driver | Reports status by WhatsApp message only. Reports are suggestions; the dispatcher confirms. No login in the pilot. |
 
@@ -43,7 +43,7 @@ vessel discharged -> DO received -> CusDec lodged -> channel assigned -> (exam, 
 - Exam is an optional event recorded when the channel requires physical inspection. It carries the exam yard (RCT, Grayline 1, Grayline 2) and, later, a result. It is skipped on green channel.
 - Current status is derived from the append-only event ledger. A status is never edited; a correction is a new event referencing the event it corrects.
 - Every event records `source` (person or system) and `evidence` (message id, document id, or manual entry).
-- Every event also records `confirmed_by`: the person who confirmed the suggestion. `source` is the reporter (driver, intake, staff); a system source never confirms on its own.
+- Every event also records `confirmed_by_user_id`: the logged-in user who confirmed the suggestion (set by the database, never supplied by the caller). `source` is the reporter (driver, intake, staff); a system source never confirms on its own.
 
 ## 4. Cargo model
 - **Consignment identity**: a container record is one consignment, unique per (company, container number, bill of lading). A recycled container number simply appears again with a different BL.
@@ -54,7 +54,7 @@ vessel discharged -> DO received -> CusDec lodged -> channel assigned -> (exam, 
 ## 5. Deadlines and demurrage
 - Track and display: DO valid-until, free storage until, detention/demurrage start.
 - Warn when a deadline is within a configurable window or overdue.
-- Estimate demurrage/storage cost from tariff rates entered by `cha_ops` (decided). Rates are data, not code. The estimate is labelled an estimate and is visible to `cha_ops` and the owning `client` only.
+- Estimate demurrage/storage cost from tariff rates entered by `cha_ops` (decided). Rates are data, not code. The estimate is labelled an estimate and is visible to `cha_ops` and the `client` the container is shared with, never to hauliers.
 
 ## 6. Message and document flows
 Intake channels:
@@ -72,6 +72,14 @@ Who sends what (typical):
 - CHA ops: DO, CusDec summary, channel result, delivery advice.
 - Client: DO or shipping line mail, delivery address.
 - Driver: "reached gate", "loaded", "delivered", "empty returned" style messages.
+
+### Intake rules (implemented, `src/intake`)
+- The raw message or document is stored first as company-private, append-only evidence. Claude (structured output) proposes a **suggestion**: document type, one status from the fixed chain, and the fields below. Nothing is written to the ledger by extraction.
+- Trusted code then checks the model's answer: the container number must pass the ISO 6346 check digit (otherwise the suggestion is **rejected** and can never be confirmed), must literally appear in the source text, the status must be in the chain, dates must be real (Colombo +05:30 assumed when no offset), and channel / exam yard must be in their closed lists. Anything dropped needs a human look (`needs_review`).
+- A suggestion becomes an event only through `confirmSuggestion`: the person supplies a value for **every** extracted field (edits are re-validated), says when it happened if the text does not, and the acting user is recorded as confirmer. Source is `system / intake`; the role permission matrix still applies; confirming the same evidence for the same event twice is refused.
+- Fields: container_no, bl_no, vessel, voyage, consignee, importer, cha, do_date, do_valid_until, freight_paid, channel, advice_issued_at, storage_free_until, cusdec_registered_at, exam_location, exam_scheduled_at. The ledger payload keeps only non-commercial keys (reference = BL, result = channel, yard, scheduled_at).
+- Only synthetic fixtures are ever sent to the API. Real documents wait for the PDPA review.
+- `pnpm eval:intake` scores extraction against `fixtures/labels.json` (read-only ground truth). Suggestions are not persisted yet; the inbox (Prompt 4) adds that.
 
 ## 7. Notifications (outbound, behind an interface, stubbed in the pilot)
 Providers: WhatsApp, email, SMS fallback. A fake provider is used in tests. Templates exist in en/si/ta.
