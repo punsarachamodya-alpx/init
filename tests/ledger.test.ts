@@ -1,0 +1,244 @@
+import pg from 'pg';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { dbUrl } from '../src/db/config.ts';
+import { closeAppPool } from '../src/db/pool.ts';
+import { withCompany } from '../src/db/withCompany.ts';
+import { InvalidContainerNoError } from '../src/domain/iso6346.ts';
+import { EVENT_TYPES } from '../src/domain/statusChain.ts';
+import { appendCorrection, appendEvent, createContainer, currentStatus, listEvents } from '../src/ledger/ledger.ts';
+import type { EventInput } from '../src/ledger/ledger.ts';
+import { seedCompany, seedDocument, seedMessage, validContainerNo } from './helpers.ts';
+
+let companyId: string;
+let otherCompanyId: string;
+let messageId: string;
+let documentId: string;
+let owner: pg.Pool;
+
+const person = { type: 'person', ref: 'synthetic-user' } as const;
+const at = (iso: string) => new Date(iso);
+
+function input(containerId: string, eventType: EventInput['eventType'], extra: Partial<EventInput> = {}): EventInput {
+  return {
+    containerId,
+    eventType,
+    occurredAt: at('2026-10-12T03:00:00Z'),
+    source: person,
+    evidence: { type: 'message', messageId },
+    ...extra,
+  };
+}
+
+beforeAll(async () => {
+  companyId = await seedCompany('cha');
+  otherCompanyId = await seedCompany('client');
+  messageId = await seedMessage(companyId);
+  documentId = await seedDocument(companyId);
+  owner = new pg.Pool({ connectionString: dbUrl('OWNER_DATABASE_URL'), max: 2 });
+});
+afterAll(async () => {
+  await owner.end();
+  await closeAppPool();
+});
+
+describe('container numbers are validated before saving', () => {
+  test('an invalid check digit is rejected and nothing is stored', async () => {
+    await expect(withCompany(companyId, (c) => createContainer(c, { containerNo: 'ZZZU9999999' }))).rejects.toThrow(InvalidContainerNoError);
+    const n = await withCompany(companyId, async (c) => (await c.query("SELECT 1 FROM containers WHERE container_no = 'ZZZU9999999'")).rowCount);
+    expect(n).toBe(0);
+  });
+
+  test('the database itself rejects an invalid number (check constraint)', async () => {
+    await expect(
+      withCompany(companyId, (c) => c.query("INSERT INTO containers (company_id, container_no) VALUES ($1, 'ZZZU9999999')", [companyId])),
+    ).rejects.toThrow(/container_no/);
+  });
+
+  test('a valid lower-case number is stored normalised; duplicates per company are refused', async () => {
+    const c1 = await withCompany(companyId, (c) => createContainer(c, { containerNo: 'zzzu 3456787' }));
+    expect(c1.containerNo).toBe('ZZZU3456787');
+    await expect(withCompany(companyId, (c) => createContainer(c, { containerNo: 'ZZZU3456787' }))).rejects.toThrow(/duplicate|unique/);
+  });
+});
+
+describe('the ledger is append-only', () => {
+  let containerId: string;
+  let eventId: string;
+  beforeAll(async () => {
+    const r = await withCompany(companyId, async (c) => {
+      const cont = await createContainer(c, { containerNo: 'ZZZU1234564' });
+      const ev = await appendEvent(c, input(cont.id, 'do_received'));
+      return { containerId: cont.id, eventId: ev.id };
+    });
+    ({ containerId, eventId } = r);
+  });
+
+  test('UPDATE, DELETE and TRUNCATE are denied to the application role', async () => {
+    await expect(withCompany(companyId, (c) => c.query("UPDATE events SET source_ref = 'x'"))).rejects.toThrow(/permission denied/);
+    await expect(withCompany(companyId, (c) => c.query('DELETE FROM events'))).rejects.toThrow(/permission denied/);
+    await expect(withCompany(companyId, (c) => c.query('TRUNCATE events'))).rejects.toThrow(/permission denied/);
+  });
+
+  test('UPDATE, DELETE and TRUNCATE are denied to the table owner too (triggers)', async () => {
+    await expect(owner.query("UPDATE events SET source_ref = 'x'")).rejects.toThrow(/append-only/);
+    await expect(owner.query('DELETE FROM events')).rejects.toThrow(/append-only/);
+    await expect(owner.query('TRUNCATE events')).rejects.toThrow(/append-only/);
+  });
+
+  test('the event row is unchanged after the failed attempts', async () => {
+    const events = await withCompany(companyId, (c) => listEvents(c, containerId));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ id: eventId, eventType: 'do_received', source: person });
+  });
+
+  test('a correction is a new event that references the original', async () => {
+    const correction = await withCompany(companyId, (c) =>
+      appendCorrection(c, eventId, input(containerId, 'do_received', { occurredAt: at('2026-10-12T05:00:00Z'), evidence: { type: 'manual', note: 'DO time corrected from the stamped copy' } })),
+    );
+    expect(correction.correctsEventId).toBe(eventId);
+    const events = await withCompany(companyId, (c) => listEvents(c, containerId));
+    expect(events.map((e) => e.id)).toEqual([eventId, correction.id]);
+    expect(events[0]!.occurredAt.toISOString()).toBe('2026-10-12T03:00:00.000Z'); // original untouched
+    const status = await withCompany(companyId, (c) => currentStatus(c, containerId));
+    expect(status).toMatchObject({ eventId: correction.id, eventType: 'do_received' });
+    expect(status!.occurredAt.toISOString()).toBe('2026-10-12T05:00:00.000Z');
+  });
+
+  test('an event can be corrected only once (chain the correction instead)', async () => {
+    await expect(
+      withCompany(companyId, (c) => appendCorrection(c, eventId, input(containerId, 'do_received', { evidence: { type: 'manual', note: 'second' } }))),
+    ).rejects.toThrow(/duplicate|unique/);
+  });
+
+  test('a correction must reference an event of the same container and company', async () => {
+    const other = await withCompany(companyId, (c) => createContainer(c, { containerNo: 'ZZZU2345670' }));
+    await expect(
+      withCompany(companyId, (c) => appendCorrection(c, eventId, input(other.id, 'do_received', { evidence: { type: 'manual', note: 'wrong container' } }))),
+    ).rejects.toThrow(/foreign key/);
+    await expect(
+      withCompany(companyId, (c) => appendCorrection(c, '11111111-1111-4111-8111-111111111111', input(containerId, 'do_received', { evidence: { type: 'manual', note: 'missing' } }))),
+    ).rejects.toThrow(/foreign key/);
+    await expect(
+      withCompany(otherCompanyId, (c) => appendCorrection(c, eventId, input(containerId, 'do_received', { evidence: { type: 'manual', note: 'cross tenant' } }))),
+    ).rejects.toThrow(/foreign key|row-level security/);
+  });
+});
+
+describe('every event records source and evidence', () => {
+  let containerId: string;
+  beforeAll(async () => {
+    containerId = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+  });
+
+  test('message, document and manual evidence are all accepted', async () => {
+    await withCompany(companyId, async (c) => {
+      await appendEvent(c, input(containerId, 'cusdec_lodged', { evidence: { type: 'message', messageId } }));
+      await appendEvent(c, input(containerId, 'channel_assigned', { evidence: { type: 'document', documentId }, source: { type: 'system', ref: 'intake' } }));
+      await appendEvent(c, input(containerId, 'exam', { evidence: { type: 'manual', note: 'Grayline 1 per CHA call' }, payload: { yard: 'Grayline 1' } }));
+    });
+    const events = await withCompany(companyId, (c) => listEvents(c, containerId));
+    expect(events).toHaveLength(3);
+    for (const e of events) {
+      expect(e.source.ref).toBeTruthy();
+      expect(['message', 'document', 'manual']).toContain(e.evidence.type);
+    }
+    expect(events[2]!.payload).toEqual({ yard: 'Grayline 1' });
+  });
+
+  test('the database refuses evidence that does not match its type', async () => {
+    const bad = (evidenceType: string, messageIdArg: string | null, documentIdArg: string | null, note: string | null) =>
+      withCompany(companyId, (c) =>
+        c.query(
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note)
+           VALUES ($1, $2, 'gate_pass', now(), 'person', 'u', $3, $4, $5, $6)`,
+          [companyId, containerId, evidenceType, messageIdArg, documentIdArg, note],
+        ),
+      );
+    await expect(bad('message', null, null, null)).rejects.toThrow(/check constraint/);
+    await expect(bad('document', null, null, null)).rejects.toThrow(/check constraint/);
+    await expect(bad('manual', null, null, null)).rejects.toThrow(/check constraint/);
+    await expect(bad('message', messageId, documentId, null)).rejects.toThrow(/check constraint/);
+    await expect(bad('whatsapp', messageId, null, null)).rejects.toThrow(/check constraint/);
+  });
+
+  test('source is required', async () => {
+    await expect(
+      withCompany(companyId, (c) =>
+        c.query(
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, evidence_type, evidence_note)
+           VALUES ($1, $2, 'gate_pass', now(), 'manual', 'n')`,
+          [companyId, containerId],
+        ),
+      ),
+    ).rejects.toThrow(/null value|not-null/);
+  });
+
+  test('an event cannot use evidence from another company', async () => {
+    const foreignMessage = await seedMessage(otherCompanyId);
+    await expect(
+      withCompany(companyId, (c) => appendEvent(c, input(containerId, 'gate_pass', { evidence: { type: 'message', messageId: foreignMessage } }))),
+    ).rejects.toThrow(/foreign key/);
+  });
+});
+
+describe('status chain', () => {
+  let containerId: string;
+  beforeAll(async () => {
+    containerId = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+  });
+
+  test('the chain is exactly the documented sequence', () => {
+    expect([...EVENT_TYPES]).toEqual([
+      'vessel_discharged',
+      'do_received',
+      'cusdec_lodged',
+      'channel_assigned',
+      'exam',
+      'release_advice',
+      'gate_pass',
+      'truck_dispatched',
+      'picked_up',
+      'delivered',
+      'empty_returned',
+    ]);
+  });
+
+  test('a status outside the chain is rejected', async () => {
+    await expect(
+      withCompany(companyId, (c) => appendEvent(c, input(containerId, 'invented_status' as EventInput['eventType']))),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  test('every chain status can be stored and current status follows chain order, not arrival order', async () => {
+    const id = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+    expect(await withCompany(companyId, (c) => currentStatus(c, id))).toBeNull();
+    // Messages arrive out of order: gate pass is recorded before the DO.
+    await withCompany(companyId, async (c) => {
+      await appendEvent(c, input(id, 'gate_pass'));
+      await appendEvent(c, input(id, 'do_received'));
+    });
+    expect((await withCompany(companyId, (c) => currentStatus(c, id)))!.eventType).toBe('gate_pass');
+    for (const t of EVENT_TYPES) {
+      await withCompany(companyId, (c) => appendEvent(c, input(id, t)));
+      expect((await withCompany(companyId, (c) => currentStatus(c, id)))!.eventType).toBe(
+        EVENT_TYPES.indexOf(t) >= EVENT_TYPES.indexOf('gate_pass') ? t : 'gate_pass',
+      );
+    }
+  });
+
+  test('exam sits between channel assigned and release', async () => {
+    const id = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+    await withCompany(companyId, async (c) => {
+      await appendEvent(c, input(id, 'release_advice'));
+      await appendEvent(c, input(id, 'exam'));
+    });
+    expect((await withCompany(companyId, (c) => currentStatus(c, id)))!.eventType).toBe('release_advice');
+  });
+
+  test('occurred_at is stored as an instant (UTC)', async () => {
+    const id = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+    await withCompany(companyId, (c) => appendEvent(c, input(id, 'delivered', { occurredAt: new Date('2026-10-14T18:45:00+05:30') })));
+    const [e] = await withCompany(companyId, (c) => listEvents(c, id));
+    expect(e!.occurredAt.toISOString()).toBe('2026-10-14T13:15:00.000Z');
+  });
+});

@@ -16,7 +16,7 @@ export default async function setup(): Promise<void> {
     if (role.rowCount === 0) {
       await admin.query(`CREATE ROLE ${APP_ROLE} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${APP_PASSWORD}'`);
     } else {
-      await admin.query(`ALTER ROLE ${APP_ROLE} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${APP_PASSWORD}'`);
+      await admin.query(`ALTER ROLE ${APP_ROLE} LOGIN PASSWORD '${APP_PASSWORD}'`);
     }
     await admin.query(`GRANT CONNECT ON DATABASE ${TEST_DB} TO ${APP_ROLE}`);
   } finally {
