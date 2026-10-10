@@ -1,0 +1,92 @@
+# SPEC - Colombo Release Tracker (pilot)
+
+Status: draft for owner review. Decisions below come from the Prompt 1 interview. Items marked **ASSUMED** were not explicitly answered and need confirmation.
+
+The app tracks and coordinates. It never files customs declarations or talks to ASYCUDA World. Only licensed CHAs file CusDecs.
+
+## 1. Pilot scope
+One clearing agent (CHA), 2-3 hauliers, 2 importer/exporter clients. Import clearance and hinterland trucking only.
+
+## 2. Users and permissions
+Every user belongs to one company (`company_id`). Roles:
+
+| Role | Who | Can do |
+|---|---|---|
+| `cha_ops` | Clearing agent staff | See all containers of their clients; confirm any clearance stage; assign hauliers; manage tariff rates. |
+| `client` | Importer/exporter staff | See their own containers; confirm clearance stages (DO received etc.) for their own cargo. |
+| `haulier_dispatcher` | Haulier staff | See only jobs assigned to their company; confirm trucking stages (gate pass, dispatched, picked up, delivered, empty returned). |
+| `driver` | Haulier driver | Reports status by WhatsApp message only. Reports are suggestions; the dispatcher confirms. No login in the pilot. |
+
+Decisions:
+- Clearance stages (DO received, CusDec lodged, channel assigned, exam, release/DA): any pilot user in the company chain for that container can confirm. Source and evidence are always recorded.
+- Trucking stages: the haulier dispatcher confirms; drivers report.
+- Hauliers never see commercial information (freight, demurrage estimates, client pricing, tariffs).
+
+## 3. Status chain (fixed, do not add statuses)
+vessel discharged -> DO received -> CusDec lodged -> channel assigned -> (exam, if selected) -> release / delivery advice -> gate pass -> truck dispatched -> picked up -> delivered -> empty returned
+
+- Exam is an optional event recorded when the channel requires physical inspection. It carries the exam yard (RCT, Grayline 1, Grayline 2) and, later, a result. It is skipped on green channel.
+- Current status is derived from the append-only event ledger. A status is never edited; a correction is a new event referencing the event it corrects.
+- Every event records `source` (person or system) and `evidence` (message id, document id, or manual entry).
+
+## 4. Cargo model
+- **FCL**: one container, one consignee, one status chain.
+- **LCL (full support, decided)**: one container carries several consignee shipments. Each shipment has its own status chain from DO received onward; the container has shared events (vessel discharged, gate pass, truck dispatched, picked up, empty returned apply per container or per shipment as the data model decides in Prompt 2).
+- **Cost note**: full LCL roughly doubles the data model and the board UI. If the pilot slips, LCL is the first thing to defer.
+
+## 5. Deadlines and demurrage
+- Track and display: DO valid-until, free storage until, detention/demurrage start.
+- Warn when a deadline is within a configurable window or overdue.
+- Estimate demurrage/storage cost from tariff rates entered by `cha_ops` (decided). Rates are data, not code. The estimate is labelled an estimate and is visible to `cha_ops` and the owning `client` only.
+
+## 6. Message and document flows
+Intake channels:
+1. **Pilot start**: staff paste message text or upload documents into the web app.
+2. **After the flow is proven**: WhatsApp Business API inbound (forwarded messages, documents, driver reports) to one number. The Intake module is channel-agnostic so WhatsApp is an adapter, not a rewrite.
+
+Flow (all channels):
+1. Raw message/document stored (Message / Document tables) with `company_id`.
+2. Intake calls Claude with structured output and returns a **suggested event** with per-field confidence.
+3. A permitted person reviews and confirms or edits every extracted field. Only then is an event appended.
+4. Container numbers are validated with the ISO 6346 check digit; invalid numbers are rejected and flagged, never saved.
+5. Languages: English, Sinhala, Tamil, and Romanised Sinhala messages must be handled by extraction. UI is `en`, `si`, `ta`.
+
+Who sends what (typical):
+- CHA ops: DO, CusDec summary, channel result, delivery advice.
+- Client: DO or shipping line mail, delivery address.
+- Driver: "reached gate", "loaded", "delivered", "empty returned" style messages.
+
+## 7. Notifications (outbound, behind an interface, stubbed in the pilot)
+Providers: WhatsApp, email, SMS fallback. A fake provider is used in tests. Templates exist in en/si/ta.
+- Haulier: job assigned / cleared to collect (gate pass confirmed or released).
+- Client: status-change updates on key changes (channel assigned, released, delivered).
+- Ops: deadline warnings (DO expiry, storage ending, estimated demurrage).
+- Ops: reminder when suggested events sit unconfirmed too long.
+
+## 8. Screens
+1. **Board** (ops/client): containers grouped by current status, age in status, evidence of last change, deadline badges.
+2. **Container detail**: full event timeline, linked messages/documents, shipments (LCL), deadlines and estimate.
+3. **Intake inbox**: paste/upload; list of suggested events with extracted fields to confirm, edit or reject.
+4. **Haulier jobs**: assigned jobs only - container no., pickup window, terminal/yard, gate pass status, clearance status, importer contact and delivery address. No commercial data.
+5. **Settings**: users/roles, tariff rates, deadline warning windows, language.
+All user-facing text from `/locales`.
+
+## 9. Non-functional rules (from CLAUDE.md)
+Append-only ledger; `company_id` and row-level security on every table; synthetic fixtures only; humans confirm extraction; UTC storage and Asia/Colombo display; ISO 6346 validation; PDPA obligations reviewed before any real data.
+
+## 10. Out of scope for the pilot (**ASSUMED** - interview answer was blank)
+- Customs filing or any ASYCUDA integration.
+- Invoicing and payments.
+- Live GPS / truck telematics.
+- Export workflow (import only).
+- Any automatic status change without human confirmation.
+
+## 11. Stack (proposed, owner accepted the default)
+TypeScript; Next.js (App Router); PostgreSQL with row-level security; pg-boss job queue on Postgres; Vitest; Playwright; pnpm; Claude API with structured output for extraction.
+
+## 12. Open questions
+- Confirm the Section 10 out-of-scope list.
+- LCL event model: which events are per-container vs per-shipment (decide in Prompt 2 plan).
+- Demurrage tariff source and who maintains it.
+- WhatsApp Business API provider and approval timeline.
+- Whether `.claude/` (agents, hooks, settings.json) was meant to be in the repo; it was not uploaded.
