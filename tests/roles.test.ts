@@ -214,21 +214,24 @@ describe('payload cannot carry commercial data (hauliers read events)', () => {
     await expect(ev(cha, id, 'exam', { payload: payload as never })).rejects.toThrow(/check constraint/);
   });
 
-  test('a JSON array or scalar payload is rejected, even for the owner role', async () => {
+  test('a JSON array or scalar payload is rejected, even for the table owner', async () => {
     const id = await sharedContainer();
     for (const bad of ['[]', '"x"', '1']) {
-      await expect(
-        owner.query(
-          `SELECT set_config('app.company_id', $1, false), set_config('app.user_id', $2, false)`,
-          [cha.companyId, cha.userId],
-        ).then(() =>
-          owner.query(
-            `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note, payload, confirmed_by_user_id, recorded_by_company_id)
-             VALUES ($1, $2, 'exam', now(), 'person', 'u', 'manual', 'n', $3::jsonb, $4, $1)`,
-            [cha.companyId, id, bad, cha.userId],
+      const c = await owner.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query("SELECT set_config('app.company_id', $1, true), set_config('app.user_id', $2, true)", [cha.companyId, cha.userId]);
+        await expect(
+          c.query(
+            `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note, payload)
+             VALUES ($1, $2, 'exam', now(), 'person', 'u', 'manual', 'n', $3::jsonb)`,
+            [cha.companyId, id, bad],
           ),
-        ),
-      ).rejects.toThrow(/check constraint/);
+        ).rejects.toThrow(/check constraint/);
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        c.release();
+      }
     }
   });
 

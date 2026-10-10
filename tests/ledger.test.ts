@@ -4,7 +4,8 @@ import { dbUrl } from '../src/db/config.ts';
 import { closeAppPool } from '../src/db/pool.ts';
 import { withActor } from '../src/db/withActor.ts';
 import { InvalidContainerNoError } from '../src/domain/iso6346.ts';
-import { EVENT_TYPES } from '../src/domain/statusChain.ts';
+import { grantAccess } from '../src/access/access.ts';
+import { EVENT_TYPES, ROLE_EVENT_TYPES } from '../src/domain/statusChain.ts';
 import { appendCorrection, appendEvent, createContainer, currentStatus, listEvents } from '../src/ledger/ledger.ts';
 import type { EventInput } from '../src/ledger/ledger.ts';
 import { newBl, seedActor, seedDocument, seedMessage, validContainerNo } from './helpers.ts';
@@ -171,7 +172,7 @@ describe('every event records source and evidence', () => {
       withActor(cha, (c) =>
         c.query(
           `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note)
-           VALUES ($1, $2, 'gate_pass', now(), 'person', 'u', $3, $4, $5, $6)`,
+           VALUES ($1, $2, 'cusdec_lodged', now(), 'person', 'u', $3, $4, $5, $6)`,
           [companyId, containerId, evidenceType, messageIdArg, documentIdArg, note],
         ),
       );
@@ -187,7 +188,7 @@ describe('every event records source and evidence', () => {
       withActor(cha, (c) =>
         c.query(
           `INSERT INTO events (company_id, container_id, event_type, occurred_at, evidence_type, evidence_note)
-           VALUES ($1, $2, 'gate_pass', now(), 'manual', 'n')`,
+           VALUES ($1, $2, 'cusdec_lodged', now(), 'manual', 'n')`,
           [companyId, containerId],
         ),
       ),
@@ -197,7 +198,7 @@ describe('every event records source and evidence', () => {
   test('an event cannot use evidence from another company', async () => {
     const foreignMessage = await seedMessage(outsider);
     await expect(
-      withActor(cha, (c) => appendEvent(c, input(containerId, 'gate_pass', { evidence: { type: 'message', messageId: foreignMessage } }))),
+      withActor(cha, (c) => appendEvent(c, input(containerId, 'cusdec_lodged', { evidence: { type: 'message', messageId: foreignMessage } }))),
     ).rejects.toThrow(/foreign key/);
   });
 });
@@ -227,20 +228,28 @@ describe('status chain', () => {
   test('a status outside the chain is rejected', async () => {
     await expect(
       withActor(cha, (c) => appendEvent(c, input(containerId, 'invented_status' as EventInput['eventType']))),
-    ).rejects.toThrow(/check constraint/);
+    ).rejects.toThrow(/row-level security|check constraint/); // the permission matrix and the CHECK both refuse it
   });
 
   test('every chain status can be stored and current status follows chain order, not arrival order', async () => {
-    const id = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
-    expect(await withActor(cha, (c) => currentStatus(c, id))).toBeNull();
-    // Messages arrive out of order: gate pass is recorded before the DO.
-    await withActor(cha, async (c) => {
-      await appendEvent(c, input(id, 'gate_pass'));
-      await appendEvent(c, input(id, 'do_received'));
+    const haulier = await seedActor('haulier');
+    const id = await withActor(cha, async (c) => {
+      const container = await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() });
+      await grantAccess(c, { containerId: container.id, granteeCompanyId: haulier.companyId, kind: 'haulier' });
+      return container.id;
     });
+    const record = async (type: EventInput['eventType']) => {
+      const actor = ROLE_EVENT_TYPES.cha_ops.includes(type) ? cha : haulier;
+      const evidence = { type: 'manual', note: `synthetic ${type}` } as const;
+      await withActor(actor, (c) => appendEvent(c, input(id, type, { evidence })));
+    };
+    expect(await withActor(cha, (c) => currentStatus(c, id))).toBeNull();
+    // Messages arrive out of order: the gate pass is recorded before the DO.
+    await record('gate_pass');
+    await record('do_received');
     expect((await withActor(cha, (c) => currentStatus(c, id)))!.eventType).toBe('gate_pass');
     for (const t of EVENT_TYPES) {
-      await withActor(cha, (c) => appendEvent(c, input(id, t)));
+      await record(t);
       expect((await withActor(cha, (c) => currentStatus(c, id)))!.eventType).toBe(
         EVENT_TYPES.indexOf(t) >= EVENT_TYPES.indexOf('gate_pass') ? t : 'gate_pass',
       );
@@ -258,7 +267,7 @@ describe('status chain', () => {
 
   test('occurred_at is stored as an instant (UTC)', async () => {
     const id = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
-    await withActor(cha, (c) => appendEvent(c, input(id, 'delivered', { occurredAt: new Date('2026-10-14T18:45:00+05:30') })));
+    await withActor(cha, (c) => appendEvent(c, input(id, 'cusdec_lodged', { occurredAt: new Date('2026-10-14T18:45:00+05:30') })));
     const [e] = await withActor(cha, (c) => listEvents(c, id));
     expect(e!.occurredAt.toISOString()).toBe('2026-10-14T13:15:00.000Z');
   });

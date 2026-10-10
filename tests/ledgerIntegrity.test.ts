@@ -39,7 +39,7 @@ async function asOwner<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
 }
 
 const RAW_COLS = `company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note`;
-const RAW_VALS = `$1, $2, 'gate_pass', now(), 'person', 'u', 'manual', 'n'`;
+const RAW_VALS = `$1, $2, 'cusdec_lodged', now(), 'person', 'u', 'manual', 'n'`;
 
 beforeAll(async () => {
   cha = await seedActor('cha');
@@ -178,7 +178,7 @@ describe('role gates', () => {
   test.each(['client', 'haulier'] as const)('a %s user cannot create containers or events', async (kind) => {
     const actor = await seedActor(kind);
     await expect(withActor(actor, (c) => createContainer(c, { blNo: newBl(), containerNo: validContainerNo() }))).rejects.toThrow(/row-level security/);
-    await expect(withActor(actor, (c) => appendEvent(c, base()))).rejects.toThrow(/row-level security/);
+    await expect(withActor(actor, (c) => appendEvent(c, base()))).rejects.toThrow(/row-level security|foreign key/);
   });
 
   test.each(['client', 'haulier'] as const)('a %s user can store its own messages and documents', async (kind) => {

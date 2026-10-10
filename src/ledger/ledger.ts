@@ -1,10 +1,10 @@
 import type { CompanyClient } from '../db/withCompany.ts';
 import { parseContainerNo } from '../domain/iso6346.ts';
-import type { EventType } from '../domain/statusChain.ts';
+import type { EventPayload, EventType } from '../domain/statusChain.ts';
 
-// The only write path to `events`. Everything runs on a client from `withCompany`,
-// so company_id always comes from the transaction's company context (app_company_id()),
-// never from the caller. Events are appended, never changed: a correction is a new
+// The only write path to `events`. Everything runs on a client from `withActor`. The ledger owner
+// (company_id) is the container's owning CHA, resolved by the database; the recorder and the
+// confirming user are always the acting company and user (database defaults, not caller input). Events are appended, never changed: a correction is a new
 // event that references the one it corrects.
 
 export type Source = { type: 'person' | 'system'; ref: string };
@@ -21,12 +21,17 @@ export interface EventInput {
   /** Who or what reported it (driver, intake, staff member). */
   source: Source;
   evidence: Evidence;
-  payload?: Record<string, unknown>;
+  /** Non-commercial details only (whitelisted keys); hauliers can read events. */
+  payload?: EventPayload;
 }
 
 export interface LedgerEvent {
   id: string;
   seq: string;
+  /** The owning CHA whose ledger this is. */
+  companyId: string;
+  /** The company that recorded the event (the CHA, a client or a haulier). */
+  recordedByCompanyId: string;
   containerId: string;
   eventType: EventType;
   occurredAt: Date;
@@ -71,12 +76,14 @@ export async function createContainer(
   return { id: row.id, containerNo: row.container_no, blNo: row.bl_no, cargoType: row.cargo_type };
 }
 
-const EVENT_COLUMNS = `id, seq, container_id, event_type, occurred_at, recorded_at, source_type, source_ref,
+const EVENT_COLUMNS = `id, seq, company_id, recorded_by_company_id, container_id, event_type, occurred_at, recorded_at, source_type, source_ref,
   evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload, confirmed_by_user_id`;
 
 interface EventRow {
   id: string;
   seq: string;
+  company_id: string;
+  recorded_by_company_id: string;
   container_id: string;
   event_type: EventType;
   occurred_at: Date;
@@ -107,6 +114,8 @@ function toEvent(row: EventRow): LedgerEvent {
   return {
     id: row.id,
     seq: row.seq,
+    companyId: row.company_id,
+    recordedByCompanyId: row.recorded_by_company_id,
     containerId: row.container_id,
     eventType: row.event_type,
     occurredAt: row.occurred_at,
@@ -124,7 +133,8 @@ async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId:
   const { rows } = await c.query<EventRow>(
     `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref,
                          evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload)
-     VALUES (app_company_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     VALUES (COALESCE((SELECT company_id FROM containers WHERE id = $1), app_company_id()),
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING ${EVENT_COLUMNS}`,
     [
       input.containerId,
