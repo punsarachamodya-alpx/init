@@ -83,22 +83,35 @@ Who sends what (typical):
 - Fields: container_no, bl_no, vessel, voyage, consignee, importer, cha, do_date, do_valid_until, freight_paid, channel, advice_issued_at, storage_free_until, cusdec_registered_at, exam_location, exam_scheduled_at. The ledger payload keeps only keys and values the payload rules accept (reference = BL if it is identifier-like, result = channel, yard, scheduled_at in UTC); any extracted value the ledger would refuse (a B/L with spaces, say) is left out of the payload, though it stays on the container.
 - Only synthetic fixtures are ever sent to the API. Real documents wait for the PDPA review.
 - `pnpm eval:intake` scores extraction against `fixtures/labels.json` (read-only ground truth, SHA-256 pinned in a test; a custom labels file must live in `fixtures/`). It aborts, rather than reporting 0%, if the API call itself fails; an item that expects no event passes only if it is rejected for the invalid container; the report title says `DRY RUN - NOT MODEL RESULTS` or `REAL RUN <model>`.
-- Known limits, deferred to Prompt 4: suggestions are passed in by the caller rather than persisted and confirmed by id (so the server cannot yet re-load status and evidence), and the duplicate-confirmation guard is a check-then-insert without a unique index.
+- Persisted suggestions (migration 0011, `src/intake/store.ts`): every suggestion is stored (immutable) with its evidence, and a decision (`confirmed` or `rejected`) is stored once per suggestion (`UNIQUE (suggestion_id)`). `confirmSuggestionById` loads status, evidence and extracted fields from the database (the caller supplies only the person's values), re-checks that the container number is a whole token in the stored evidence text, then writes the event and the decision in one transaction, so two simultaneous confirms produce one event. The duplicate guard on the evidence itself is still a check-then-insert (not a unique index, so that a void can release the evidence); the unique decision is what closes the by-id path.
+- The duplicate guard follows the correction chain: a replaced event keeps consuming its evidence, only a chain that ends in a void releases it (so confirm, void, confirm again works; confirm, replace with manual evidence, confirm again does not).
+- Failed or absent extraction (no API key, a refusal): the inbox shows the item as failed and the person uses **manual entry** (`recordManualEvent`): container, stage, time and a reason kept as the event's manual evidence, under the same role rules.
 
 ## 7. Notifications (outbound, behind an interface, stubbed in the pilot)
-Providers: WhatsApp, email, SMS fallback. A fake provider is used in tests. Templates exist in en/si/ta.
-- Haulier: job assigned / cleared to collect (gate pass confirmed or released).
-- Client: status-change updates on key changes (channel assigned, released, delivered).
-- Ops: deadline warnings (DO expiry, storage ending, estimated demurrage).
+Providers: WhatsApp, email, SMS fallback. A fake provider is used in tests; a logging provider (redacted line, nothing sent) is wired in the app. Templates exist in en/si/ta.
+- Haulier: job assigned / cleared to collect (released).
+- Client: status-change updates on key changes (channel assigned, released, delivered, empty returned).
+- Ops: reminder when suggestions sit unconfirmed (counts only).
+- Ops: deadline warnings (DO expiry, storage ending, estimated demurrage). **Not built**: needs the deadline and demurrage model of section 5.
+
+Implemented (migration 0012, `src/notify`):
+- `user_contacts` (WhatsApp, email, SMS, language; insert-only; a user adds their own, a CHA its own staff). A CHA can read the contacts of companies it currently shares a container with, nobody else's.
+- `notifications` is an outbox of immutable rows: kind, recipient (own company or a current grantee), `event_id` and parameters restricted by the database to a container number, a chain status and a count. Nothing commercial can be put in a notification. `notification_attempts` is an append-only log (round, channel, sent / failed / skipped, provider reference, error up to 200 characters).
+- `notifyAfterEvent` queues what an ordinary event calls for and is **run by the owning CHA** (only it can read its grantees' contacts): a haulier recording `delivered` is announced to the client by the CHA-side sweep `notifyPendingEvents` (the board's "send notifications" button runs it), idempotent per (event, recipient, kind). Corrections and voids are not announced.
+- `dispatchPending` tries WhatsApp, then email, then SMS using only channels the recipient has an address for and a provider exists for, in the recipient's language, logging each attempt. Rounds are limited (default 3). `skipped` (nothing usable) is final. Providers run inside the caller's transaction, which is fine for stubs: move sending out of the transaction before adding a real provider and a worker (pg-boss).
+- Free text in events (`note`, evidence notes) is visible to hauliers on the events they can read: never enter prices or charges there.
 - Ops: reminder when suggested events sit unconfirmed too long.
 
 ## 8. Screens
-1. **Board** (ops/client): containers grouped by current status, age in status, evidence of last change, deadline badges.
-2. **Container detail**: full event timeline, linked messages/documents, shipments (LCL), deadlines and estimate.
-3. **Intake inbox**: paste/upload; list of suggested events with extracted fields to confirm, edit or reject.
+Implemented in `app/` (Next.js App Router, React 19). Every server action runs through `withActor`; the signed session cookie (`src/web/session.ts`) only says who, the role is read from the database.
+1. **Board** (all roles): containers grouped by current status in chain order, **age in the current status** (from the stage event's time), and the **evidence of the last change** (type, source, who recorded it, and the message or document excerpt only where the viewer's own company holds that evidence: row-level security decides). Hauliers see no B/L number. Deadline badges: not built (needs section 5).
+2. **Container detail**: the full timeline with time spent in each status; replaced and voided events are shown struck through, never hidden. Linked documents, LCL shipments, deadlines and the estimate: not built.
+3. **Intake inbox**: paste text, get a suggestion, check every extracted field, **one tap to confirm** (status, time and fields are prefilled; the time defaults to now when the text gave none); reject with a reason; manual entry. The confirm form lists only the stages the viewer's role may record.
 4. **Haulier jobs**: assigned jobs only - container no., pickup window, terminal/yard, gate pass status, clearance status, importer contact and delivery address. No commercial data.
 5. **Settings**: users/roles, tariff rates, deadline warning windows, language.
-All user-facing text from `/locales`.
+All user-facing text from `/locales` (`en`, `si`, `ta`; flat dotted keys). A key missing from a locale is a compile error; tests fail on mismatched placeholders, unused keys and literal text in `app/` JSX (lint). **The Sinhala and Tamil strings were written by the assistant and need review by native speakers before any real user sees them.** Dates are stored in UTC and shown in Asia/Colombo; the language is a cookie choice (login page included). The container has no Sinhala or Tamil system fonts, so the browser tests assert text, not rendering; the CSS font stack names Noto Sans Sinhala / Tamil.
+
+**Sign-in is a development picker, not authentication**: it lists the synthetic users written by `pnpm seed:demo` (`.demo-users.json`, gitignored), throws when `NODE_ENV=production`, and takes only a user id from the form (the company id comes from the server's own list). Real authentication (and user deactivation) is required before any real user; the cookie and `getActor()` seam stay. `INTAKE_EXTRACTOR=fake` (a rule-based stand-in, not a model result) is for the browser tests and demos and is refused in production; with neither it nor `ANTHROPIC_API_KEY` set, intake stores a failed suggestion and staff use manual entry.
 
 ## 9. Non-functional rules (from CLAUDE.md)
 Append-only ledger; `company_id` and row-level security on every table; synthetic fixtures only; humans confirm extraction; UTC storage and Asia/Colombo display; ISO 6346 validation; PDPA obligations reviewed before any real data.
@@ -121,5 +134,7 @@ TypeScript; Next.js (App Router); PostgreSQL with row-level security; pg-boss jo
 - Exam-after-channel and green-channel-skips-exam rules.
 - Accepted for the pilot: `seq` gaps are visible to grantees (a hint of overall activity), the same-type cross-party correction rule, `bl_no` is not normalised in the database, concurrent grant/revoke ordering is by insertion not commit, and the actor-token check runs per policy evaluation (fine at pilot size; wrap it in a sub-select if scans get large).
 - Demurrage tariff source and who maintains it.
+- Prompt 4 leaves open: real authentication (the dev picker is not it), assignment/sharing UI (the demo grants come from the seed), deadline and demurrage warnings, real WhatsApp/email/SMS providers and the pg-boss worker (the dispatcher is a plain function; providers run inside the caller's transaction), WhatsApp inbound, native review of the Sinhala and Tamil strings, and exposing events recorded by a client or haulier to the other parties' contacts (only the owning CHA notifies).
+- A valid actor token for a user who is not in the company (a deleted user) passes the post-token check, which covers the company only; every query then returns nothing and the web app signs the user out. Calling `assertProductionSecret` at app start (it only runs in `set-actor-key`) is a hardening follow-up, as is `noInlineConfig` for lint and `ALTER ROLE colombo_app SET search_path`.
 - WhatsApp Business API provider and approval timeline.
 - Whether `.claude/` (agents, hooks, settings.json) was meant to be in the repo; it was not uploaded.

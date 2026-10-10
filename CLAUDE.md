@@ -5,10 +5,12 @@ WhatsApp-first container release tracker and dispatch board for Colombo import c
 The app tracks and coordinates. It never files customs declarations. Only licensed CHAs file CusDecs in ASYCUDA World.
 
 ## Commands
-Stack: TypeScript, Next.js (App Router), PostgreSQL with row-level security, pg-boss job queue, Vitest, Playwright, pnpm. Scripts are created in Prompt 2; until then only the ISO 6346 script exists. See SPEC.md.
-- `pnpm dev` - run the app locally (not yet: the Next.js app arrives in Prompt 4)
+Stack: TypeScript, Next.js (App Router), PostgreSQL with row-level security, pg-boss job queue, Vitest, Playwright, pnpm. See SPEC.md.
+- `pnpm dev` - run the web app locally (needs `APP_DATABASE_URL`, `ACTOR_CONTEXT_SECRET` and a migrated database; `pnpm seed:demo` writes synthetic demo data and the dev login picker file; `INTAKE_EXTRACTOR=fake` gives a rule-based stand-in for the model, never in production)
+- `pnpm seed:demo` - synthetic CHA, client, haulier, three containers (writes `.demo-users.json`, gitignored)
+- `pnpm build` / `pnpm start` - production build; the dev login picker is disabled there and `SESSION_SECRET` is required
 - `pnpm test` - unit and integration tests (Vitest); needs local PostgreSQL with the `colombo_owner` role (it rebuilds the `colombo_test` database each run)
-- `pnpm e2e` - Playwright end-to-end tests
+- `pnpm e2e` - Playwright end-to-end tests (rebuilds the throwaway `colombo_e2e` database, starts `next dev` on port 3100 with the fake extractor; Chromium from `/opt/pw-browsers` launched by path; screenshots of the full chain land in `test-results/`)
 - `pnpm typecheck` - `tsc --noEmit`
 - `pnpm lint` - lint
 - `pnpm set-actor-key` - once per environment as the owner role (`OWNER_DATABASE_URL`, `ACTOR_CONTEXT_SECRET`): provision or rotate the key the database verifies actor tokens against
