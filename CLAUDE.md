@@ -6,12 +6,12 @@ The app tracks and coordinates. It never files customs declarations. Only licens
 
 ## Commands
 Stack: TypeScript, Next.js (App Router), PostgreSQL with row-level security, pg-boss job queue, Vitest, Playwright, pnpm. Scripts are created in Prompt 2; until then only the ISO 6346 script exists. See SPEC.md.
-- `pnpm dev` - run the app locally
-- `pnpm test` - unit and integration tests (Vitest)
+- `pnpm dev` - run the app locally (not yet: the Next.js app arrives in Prompt 4)
+- `pnpm test` - unit and integration tests (Vitest); needs local PostgreSQL with the `colombo_owner` role (it rebuilds the `colombo_test` database each run)
 - `pnpm e2e` - Playwright end-to-end tests
 - `pnpm typecheck` - `tsc --noEmit`
 - `pnpm lint` - lint
-- `pnpm db:migrate` - apply new migrations (never edit existing ones)
+- `pnpm db:migrate` - apply new migrations as the owner role (`OWNER_DATABASE_URL`); the app connects as `colombo_app` (`APP_DATABASE_URL`)
 - `pnpm eval:intake` - score extraction against fixtures/labels.json (Prompt 3)
 - `node scripts/check-iso6346.mjs <container_no...>` - validate container number check digits
 
