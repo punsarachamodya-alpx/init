@@ -24,6 +24,7 @@ function input(containerId: string, eventType: EventInput['eventType'], extra: P
     eventType,
     occurredAt: at('2026-10-12T03:00:00Z'),
     source: person,
+    confirmedBy: 'synthetic-ops-user',
     evidence: { type: 'message', messageId },
     ...extra,
   };
@@ -88,7 +89,7 @@ describe('the ledger is append-only', () => {
   test('the event row is unchanged after the failed attempts', async () => {
     const events = await withCompany(companyId, (c) => listEvents(c, containerId));
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ id: eventId, eventType: 'do_received', source: person });
+    expect(events[0]).toMatchObject({ id: eventId, eventType: 'do_received', source: person, confirmedBy: 'synthetic-ops-user' });
   });
 
   test('a correction is a new event that references the original', async () => {
@@ -150,8 +151,8 @@ describe('every event records source and evidence', () => {
     const bad = (evidenceType: string, messageIdArg: string | null, documentIdArg: string | null, note: string | null) =>
       withCompany(companyId, (c) =>
         c.query(
-          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note)
-           VALUES ($1, $2, 'gate_pass', now(), 'person', 'u', $3, $4, $5, $6)`,
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note, confirmed_by)
+           VALUES ($1, $2, 'gate_pass', now(), 'person', 'u', $3, $4, $5, $6, 'synthetic-ops-user')`,
           [companyId, containerId, evidenceType, messageIdArg, documentIdArg, note],
         ),
       );
@@ -166,8 +167,8 @@ describe('every event records source and evidence', () => {
     await expect(
       withCompany(companyId, (c) =>
         c.query(
-          `INSERT INTO events (company_id, container_id, event_type, occurred_at, evidence_type, evidence_note)
-           VALUES ($1, $2, 'gate_pass', now(), 'manual', 'n')`,
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, evidence_type, evidence_note, confirmed_by)
+           VALUES ($1, $2, 'gate_pass', now(), 'manual', 'n', 'synthetic-ops-user')`,
           [companyId, containerId],
         ),
       ),

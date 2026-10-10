@@ -95,7 +95,7 @@ describe('evidence is append-only', () => {
   test.each([
     ['messages', "UPDATE messages SET body = 'changed'"],
     ['messages', 'DELETE FROM messages'],
-    ['messages', 'TRUNCATE messages'],
+    ['messages', 'TRUNCATE messages CASCADE'],
     ['documents', "UPDATE documents SET text_content = 'changed'"],
     ['documents', 'DELETE FROM documents'],
     ['documents', 'TRUNCATE documents CASCADE'],

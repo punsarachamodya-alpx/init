@@ -17,6 +17,7 @@ async function seedTenant(kind: 'cha' | 'client', containerNo: string): Promise<
       eventType: 'do_received',
       occurredAt: new Date('2026-10-12T03:00:00Z'),
       source: { type: 'person', ref: 'synthetic-user' },
+      confirmedBy: 'synthetic-ops-user',
       evidence: { type: 'message', messageId },
     });
     return { id, containerId: container.id, messageId, documentId, eventId: event.id };
@@ -83,8 +84,8 @@ describe('cross-company writes and references are impossible', () => {
     const insert = (containerId: string, messageId: string | null, documentId: string | null) =>
       withCompany(a.id, (c) =>
         c.query(
-          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note)
-           VALUES ($1, $2, 'cusdec_lodged', now(), 'person', 'synthetic-user', $3, $4, $5, $6)`,
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note, confirmed_by)
+           VALUES ($1, $2, 'cusdec_lodged', now(), 'person', 'synthetic-user', $3, $4, $5, $6, 'synthetic-ops-user')`,
           [a.id, containerId, messageId ? 'message' : documentId ? 'document' : 'manual', messageId, documentId, messageId || documentId ? null : 'note'],
         ),
       );

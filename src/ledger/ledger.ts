@@ -18,7 +18,10 @@ export interface EventInput {
   containerId: string;
   eventType: EventType;
   occurredAt: Date;
+  /** Who or what reported it (driver, intake, staff member). */
   source: Source;
+  /** The person who reviewed the suggestion and confirmed it. Required for every event. */
+  confirmedBy: string;
   evidence: Evidence;
   payload?: Record<string, unknown>;
 }
@@ -31,6 +34,7 @@ export interface LedgerEvent {
   occurredAt: Date;
   recordedAt: Date;
   source: Source;
+  confirmedBy: string;
   evidence: Evidence;
   correctsEventId: string | null;
   payload: Record<string, unknown>;
@@ -68,7 +72,7 @@ export async function createContainer(
 }
 
 const EVENT_COLUMNS = `id, seq, container_id, event_type, occurred_at, recorded_at, source_type, source_ref,
-  evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload`;
+  evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload, confirmed_by`;
 
 interface EventRow {
   id: string;
@@ -85,6 +89,7 @@ interface EventRow {
   evidence_note: string | null;
   corrects_event_id: string | null;
   payload: Record<string, unknown>;
+  confirmed_by: string;
 }
 
 function toEvidence(row: EventRow): Evidence {
@@ -107,6 +112,7 @@ function toEvent(row: EventRow): LedgerEvent {
     occurredAt: row.occurred_at,
     recordedAt: row.recorded_at,
     source: { type: row.source_type, ref: row.source_ref },
+    confirmedBy: row.confirmed_by,
     evidence: toEvidence(row),
     correctsEventId: row.corrects_event_id,
     payload: row.payload,
@@ -117,8 +123,9 @@ async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId:
   const ev = input.evidence;
   const { rows } = await c.query<EventRow>(
     `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref,
-                         evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload)
-     VALUES (app_company_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                         evidence_type, message_id, document_id, evidence_note, corrects_event_id, payload,
+                         confirmed_by)
+     VALUES (app_company_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING ${EVENT_COLUMNS}`,
     [
       input.containerId,
@@ -132,12 +139,13 @@ async function insertEvent(c: CompanyClient, input: EventInput, correctsEventId:
       ev.type === 'manual' ? ev.note : null,
       correctsEventId,
       JSON.stringify(input.payload ?? {}),
+      input.confirmedBy,
     ],
   );
   return toEvent(rows[0]!);
 }
 
-/** Append a new event to the ledger. The caller must already have a person's confirmation. */
+/** Append a new event to the ledger. `confirmedBy` is the person who confirmed the suggestion. */
 export function appendEvent(c: CompanyClient, input: EventInput): Promise<LedgerEvent> {
   return insertEvent(c, input, null);
 }
