@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { dbUrl } from '../src/db/config.ts';
 import { closeAppPool, getAppPool } from '../src/db/pool.ts';
 import { withCompany } from '../src/db/withCompany.ts';
-import { appendEvent, createContainer, currentStatus } from '../src/ledger/ledger.ts';
+import { ConfirmationRequiredError, appendEvent, createContainer, currentStatus } from '../src/ledger/ledger.ts';
 import type { EventInput } from '../src/ledger/ledger.ts';
 import { seedCompany, seedDocument, seedMessage, validContainerNo } from './helpers.ts';
 
@@ -65,6 +65,7 @@ describe('ledger order and time cannot be forged', () => {
   });
 
   test('seq is unique even for the table owner', async () => {
+    await withCompany(companyId, (c) => appendEvent(c, base()));
     await expect(
       asOwner(async (c) => {
         const { rows } = await c.query<{ seq: string }>('SELECT seq FROM events LIMIT 1');
@@ -82,7 +83,10 @@ describe('ledger order and time cannot be forged', () => {
         ),
       ),
     ).rejects.toThrow(/check constraint/);
-    expect(await withCompany(companyId, (c) => currentStatus(c, containerId))).not.toBeNull();
+    // A real attempt through the ledger path leaves the container with a defined status.
+    const fresh = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+    await withCompany(companyId, (c) => appendEvent(c, base({ containerId: fresh })));
+    expect((await withCompany(companyId, (c) => currentStatus(c, fresh)))!.eventType).toBe('do_received');
   });
 });
 
@@ -104,6 +108,27 @@ describe('evidence is append-only', () => {
   });
 });
 
+describe('evidence ids and timestamps are server-generated', () => {
+  test.each([
+    ['messages', `INSERT INTO messages (id, company_id, channel, body) VALUES (gen_random_uuid(), $1, 'web', 'x')`],
+    ['messages', `INSERT INTO messages (received_at, company_id, channel, body) VALUES ('2001-01-01', $1, 'web', 'x')`],
+    ['documents', `INSERT INTO documents (id, company_id, doc_type, text_content) VALUES (gen_random_uuid(), $1, 'other', 'x')`],
+    ['documents', `INSERT INTO documents (received_at, company_id, doc_type, text_content) VALUES ('2001-01-01', $1, 'other', 'x')`],
+  ])('%s: app role cannot supply id or received_at (%s)', async (_t, sql) => {
+    await expect(withCompany(companyId, (c) => c.query(sql, [companyId]))).rejects.toThrow(/permission denied/);
+  });
+
+  test('app role can insert only the content columns of messages and documents', async () => {
+    const { rows } = await getAppPool().query<{ table_name: string; column_name: string; ok: boolean }>(
+      `SELECT table_name, column_name, has_column_privilege('colombo_app', format('public.%I', table_name), column_name, 'INSERT') AS ok
+       FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('messages', 'documents')`,
+    );
+    const ok = (t: string) => rows.filter((r) => r.table_name === t && r.ok).map((r) => r.column_name).sort();
+    expect(ok('messages')).toEqual(['body', 'channel', 'company_id', 'language']);
+    expect(ok('documents')).toEqual(['company_id', 'doc_type', 'text_content']);
+  });
+});
+
 describe('a person confirms every event', () => {
   test('confirmed_by is required and cannot be blank', async () => {
     const insert = (confirmedBy: string | null) =>
@@ -121,7 +146,27 @@ describe('a person confirms every event', () => {
   test('appendEvent without confirmedBy is rejected at runtime', async () => {
     const { confirmedBy: _omit, ...rest } = base();
     void _omit;
-    await expect(withCompany(companyId, (c) => appendEvent(c, rest as EventInput))).rejects.toThrow();
+    await expect(withCompany(companyId, (c) => appendEvent(c, rest as EventInput))).rejects.toThrow(ConfirmationRequiredError);
+  });
+
+  test.each([
+    ['empty', ''],
+    ['spaces', '   '],
+    ['zero-width space', '\u200B'],
+    ['zero-width joiner and spaces', ' \u200D \uFEFF '],
+  ])('appendEvent rejects a blank confirmedBy (%s)', async (_name, confirmedBy) => {
+    await expect(withCompany(companyId, (c) => appendEvent(c, base({ confirmedBy })))).rejects.toThrow(ConfirmationRequiredError);
+  });
+
+  test('a system source cannot confirm itself', async () => {
+    await expect(
+      withCompany(companyId, (c) => appendEvent(c, base({ source: { type: 'system', ref: 'intake' }, confirmedBy: ' Intake ' }))),
+    ).rejects.toThrow(ConfirmationRequiredError);
+  });
+
+  test('confirmedBy is stored trimmed', async () => {
+    const e = await withCompany(companyId, (c) => appendEvent(c, base({ confirmedBy: '  synthetic-ops-user ' })));
+    expect(e.confirmedBy).toBe('synthetic-ops-user');
   });
 
   test('a system reporter is fine when a person confirmed', async () => {
