@@ -29,8 +29,9 @@ const DO_RAW = () =>
     suggestedEvent: 'do_received',
     fields: { container_no: 'ZZZU1234564', bl_no: bl, vessel: 'MV TEST HORIZON', consignee: 'SAMPLE IMPORTS (PVT) LTD', do_date: '2026-10-12', freight_paid: true },
   });
-const suggest = (actor: TestActor, r: RawExtraction, text = DO_TEXT) =>
-  withActor(actor, (c) => intake(c, fake(r), { kind: 'document', docType: 'delivery_order', text }));
+const doText = () => DO_TEXT.replaceAll('ESLCMB000101', bl); // the document names this test's BL
+const suggest = (actor: TestActor, r: RawExtraction, text?: string) =>
+  withActor(actor, (c) => intake(c, fake(r), { kind: 'document', docType: 'delivery_order', text: text ?? doText() }));
 const events = (actor: TestActor) => withActor(actor, (c) => listEvents(c, containerId));
 const when = new Date('2026-10-12T04:00:00Z');
 
@@ -142,6 +143,55 @@ describe('confirmation is the only way into the ledger', () => {
   });
 });
 
+describe('acknowledging a field means giving it a value', () => {
+  test.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['blank string', '   '],
+  ])('a %s is not an acknowledgement', async (_n, value) => {
+    const s = await suggest(cha, DO_RAW());
+    await expect(
+      withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'do_received', occurredAt: when, fields: { ...s.fields, bl_no: value as never } })),
+    ).rejects.toMatchObject({ code: 'fields_not_acknowledged' });
+  });
+
+  test('unknown keys, including __proto__, are refused', async () => {
+    const s = await suggest(cha, DO_RAW());
+    const sneaky = JSON.parse('{"__proto__": {"polluted": true}, "container_no": "ZZZU1234564"}');
+    await expect(
+      withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'do_received', occurredAt: when, fields: { ...s.fields, ...sneaky } })),
+    ).rejects.toMatchObject({ code: 'invalid_field' });
+    await expect(
+      withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'do_received', occurredAt: when, fields: { ...s.fields, shoe_size: '9' } as never })),
+    ).rejects.toMatchObject({ code: 'invalid_field' });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe('the event time and container creation are validated', () => {
+  const day = 86_400_000;
+  test.each([
+    ['an Invalid Date', new Date('nonsense')],
+    ['year 1', new Date('0001-01-01T00:00:00Z')],
+    ['before 2000', new Date('1999-12-31T00:00:00Z')],
+    ['next month', new Date(Date.now() + 30 * day)],
+  ])('%s is refused', async (_n, occurredAt) => {
+    const s = await suggest(cha, DO_RAW());
+    await expect(
+      withActor(cha, (c) => confirmSuggestion(c, s, { eventType: 'do_received', occurredAt, fields: { ...s.fields } })),
+    ).rejects.toMatchObject({ code: 'occurred_at_invalid' });
+  });
+
+  test('createContainer must be exactly true', async () => {
+    const r = raw({ suggestedEvent: 'channel_assigned', fields: { container_no: 'ZZZU3456787', bl_no: 'ESLCMB000103', cusdec_registered_at: '2026-10-12T09:20:00+05:30' } });
+    const s = await suggest(outsider, r, CUSDEC_TEXT);
+    await expect(
+      withActor(outsider, (c) => confirmSuggestion(c, s, { eventType: 'channel_assigned', fields: { ...s.fields }, createContainer: 'yes' as never })),
+    ).rejects.toMatchObject({ code: 'container_not_found' });
+  });
+});
+
 describe('roles still decide who may confirm', () => {
   test('a granted client can confirm a clearance stage on the shared container', async () => {
     const s = await suggest(client, DO_RAW());
@@ -158,7 +208,7 @@ describe('roles still decide who may confirm', () => {
   });
 
   test('a client cannot create a container from a suggestion', async () => {
-    const s = await suggest(client, raw({ suggestedEvent: 'do_received', fields: { container_no: 'ZZZU2345670', bl_no: 'ESLCMB000102' } }), 'ZZZU2345670 DO');
+    const s = await suggest(client, raw({ suggestedEvent: 'do_received', fields: { container_no: 'ZZZU2345670', bl_no: 'ESLCMB000102' } }), 'ZZZU2345670 DO, B/L ESLCMB000102');
     await expect(
       withActor(client, (c) => confirmSuggestion(c, s, { eventType: 'do_received', occurredAt: when, fields: { ...s.fields }, createContainer: true })),
     ).rejects.toThrow(/row-level security/);
