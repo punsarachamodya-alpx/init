@@ -2,11 +2,14 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { dbUrl } from '../src/db/config.ts';
 import { closeAppPool, getAppPool } from '../src/db/pool.ts';
+import { withActor } from '../src/db/withActor.ts';
 import { withCompany } from '../src/db/withCompany.ts';
-import { ConfirmationRequiredError, appendEvent, createContainer, currentStatus } from '../src/ledger/ledger.ts';
+import { appendEvent, createContainer, currentStatus } from '../src/ledger/ledger.ts';
 import type { EventInput } from '../src/ledger/ledger.ts';
-import { seedCompany, seedDocument, seedMessage, validContainerNo } from './helpers.ts';
+import { newBl, seedActor, seedDocument, seedMessage, validContainerNo } from './helpers.ts';
+import type { TestActor } from './helpers.ts';
 
+let cha: TestActor;
 let companyId: string;
 let messageId: string;
 let documentId: string;
@@ -18,17 +21,16 @@ const base = (extra: Partial<EventInput> = {}): EventInput => ({
   eventType: 'do_received',
   occurredAt: new Date('2026-10-12T03:00:00Z'),
   source: { type: 'person', ref: 'synthetic-driver' },
-  confirmedBy: 'synthetic-ops-user',
   evidence: { type: 'message', messageId },
   ...extra,
 });
 
-/** Run as the table owner inside a company context, always rolled back. */
+/** Run as the table owner inside the actor's context, always rolled back. */
 async function asOwner<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
   const c = await owner.connect();
   try {
     await c.query('BEGIN');
-    await c.query("SELECT set_config('app.company_id', $1, true)", [companyId]);
+    await c.query("SELECT set_config('app.company_id', $1, true), set_config('app.user_id', $2, true)", [companyId, cha.userId]);
     return await fn(c);
   } finally {
     await c.query('ROLLBACK').catch(() => undefined);
@@ -36,14 +38,15 @@ async function asOwner<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
   }
 }
 
-const RAW_COLS = `company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note, confirmed_by`;
-const RAW_VALS = `$1, $2, 'gate_pass', now(), 'person', 'u', 'manual', 'n', 'synthetic-ops-user'`;
+const RAW_COLS = `company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note`;
+const RAW_VALS = `$1, $2, 'gate_pass', now(), 'person', 'u', 'manual', 'n'`;
 
 beforeAll(async () => {
-  companyId = await seedCompany('cha');
-  messageId = await seedMessage(companyId);
-  documentId = await seedDocument(companyId);
-  containerId = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+  cha = await seedActor('cha');
+  companyId = cha.companyId;
+  messageId = await seedMessage(cha);
+  documentId = await seedDocument(cha);
+  containerId = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
   owner = new pg.Pool({ connectionString: dbUrl('OWNER_DATABASE_URL'), max: 2 });
 });
 afterAll(async () => {
@@ -53,19 +56,19 @@ afterAll(async () => {
 
 describe('ledger order and time cannot be forged', () => {
   test('the application role cannot supply id, seq or recorded_at', async () => {
-    const run = (sql: string) => withCompany(companyId, (c) => c.query(sql, [companyId, containerId]));
+    const run = (sql: string) => withActor(cha, (c) => c.query(sql, [companyId, containerId]));
     await expect(run(`INSERT INTO events (id, ${RAW_COLS}) VALUES (gen_random_uuid(), ${RAW_VALS})`)).rejects.toThrow(/permission denied/);
     await expect(run(`INSERT INTO events (seq, ${RAW_COLS}) OVERRIDING SYSTEM VALUE VALUES (1, ${RAW_VALS})`)).rejects.toThrow(/permission denied/);
     await expect(run(`INSERT INTO events (recorded_at, ${RAW_COLS}) VALUES ('2001-01-01', ${RAW_VALS})`)).rejects.toThrow(/permission denied/);
   });
 
   test('a normal append still works and recorded_at is server time', async () => {
-    const e = await withCompany(companyId, (c) => appendEvent(c, base()));
+    const e = await withActor(cha, (c) => appendEvent(c, base()));
     expect(Math.abs(e.recordedAt.getTime() - Date.now())).toBeLessThan(60_000);
   });
 
   test('seq is unique even for the table owner', async () => {
-    await withCompany(companyId, (c) => appendEvent(c, base()));
+    await withActor(cha, (c) => appendEvent(c, base()));
     await expect(
       asOwner(async (c) => {
         const { rows } = await c.query<{ seq: string }>('SELECT seq FROM events LIMIT 1');
@@ -83,17 +86,16 @@ describe('ledger order and time cannot be forged', () => {
         ),
       ),
     ).rejects.toThrow(/check constraint/);
-    // A real attempt through the ledger path leaves the container with a defined status.
-    const fresh = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
-    await withCompany(companyId, (c) => appendEvent(c, base({ containerId: fresh })));
-    expect((await withCompany(companyId, (c) => currentStatus(c, fresh)))!.eventType).toBe('do_received');
+    const fresh = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
+    await withActor(cha, (c) => appendEvent(c, base({ containerId: fresh })));
+    expect((await withActor(cha, (c) => currentStatus(c, fresh)))!.eventType).toBe('do_received');
   });
 });
 
 describe('evidence is append-only', () => {
   test.each(['messages', 'documents'])('%s: app role cannot update, delete or truncate', async (table) => {
-    await expect(withCompany(companyId, (c) => c.query(`DELETE FROM ${table}`))).rejects.toThrow(/permission denied/);
-    await expect(withCompany(companyId, (c) => c.query(`TRUNCATE ${table}`))).rejects.toThrow(/permission denied/);
+    await expect(withActor(cha, (c) => c.query(`DELETE FROM ${table}`))).rejects.toThrow(/permission denied/);
+    await expect(withActor(cha, (c) => c.query(`TRUNCATE ${table}`))).rejects.toThrow(/permission denied/);
   });
 
   test.each([
@@ -115,7 +117,7 @@ describe('evidence ids and timestamps are server-generated', () => {
     ['documents', `INSERT INTO documents (id, company_id, doc_type, text_content) VALUES (gen_random_uuid(), $1, 'other', 'x')`],
     ['documents', `INSERT INTO documents (received_at, company_id, doc_type, text_content) VALUES ('2001-01-01', $1, 'other', 'x')`],
   ])('%s: app role cannot supply id or received_at (%s)', async (_t, sql) => {
-    await expect(withCompany(companyId, (c) => c.query(sql, [companyId]))).rejects.toThrow(/permission denied/);
+    await expect(withActor(cha, (c) => c.query(sql, [companyId]))).rejects.toThrow(/permission denied/);
   });
 
   test('app role can insert only the content columns of messages and documents', async () => {
@@ -129,51 +131,63 @@ describe('evidence ids and timestamps are server-generated', () => {
   });
 });
 
-describe('a person confirms every event', () => {
-  test('confirmed_by is required and cannot be blank', async () => {
-    const insert = (confirmedBy: string | null) =>
-      withCompany(companyId, (c) =>
-        c.query(
-          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, evidence_note, confirmed_by)
-           VALUES ($1, $2, 'gate_pass', now(), 'person', 'u', 'manual', 'n', $3)`,
-          [companyId, containerId, confirmedBy],
-        ),
-      );
-    await expect(insert(null)).rejects.toThrow(/null value|not-null/);
-    await expect(insert('   ')).rejects.toThrow(/check constraint/);
+describe('the confirming person is the acting user', () => {
+  test('every event stores the acting user as confirmer', async () => {
+    const e = await withActor(cha, (c) => appendEvent(c, base()));
+    expect(e.confirmedByUserId).toBe(cha.userId);
   });
 
-  test('appendEvent without confirmedBy is rejected at runtime', async () => {
-    const { confirmedBy: _omit, ...rest } = base();
-    void _omit;
-    await expect(withCompany(companyId, (c) => appendEvent(c, rest as EventInput))).rejects.toThrow(ConfirmationRequiredError);
-  });
-
-  test.each([
-    ['empty', ''],
-    ['spaces', '   '],
-    ['zero-width space', '\u200B'],
-    ['zero-width joiner and spaces', ' \u200D \uFEFF '],
-  ])('appendEvent rejects a blank confirmedBy (%s)', async (_name, confirmedBy) => {
-    await expect(withCompany(companyId, (c) => appendEvent(c, base({ confirmedBy })))).rejects.toThrow(ConfirmationRequiredError);
-  });
-
-  test('a system source cannot confirm itself', async () => {
+  test('the app role cannot supply the confirming user', async () => {
+    const other = await seedActor('cha');
     await expect(
-      withCompany(companyId, (c) => appendEvent(c, base({ source: { type: 'system', ref: 'intake' }, confirmedBy: ' Intake ' }))),
-    ).rejects.toThrow(ConfirmationRequiredError);
+      withActor(cha, (c) =>
+        c.query(`INSERT INTO events (confirmed_by_user_id, ${RAW_COLS}) VALUES ($3, ${RAW_VALS})`, [companyId, containerId, other.userId]),
+      ),
+    ).rejects.toThrow(/permission denied/);
   });
 
-  test('confirmedBy is stored trimmed', async () => {
-    const e = await withCompany(companyId, (c) => appendEvent(c, base({ confirmedBy: '  synthetic-ops-user ' })));
-    expect(e.confirmedBy).toBe('synthetic-ops-user');
+  test('there is no free-text confirmer column any more', async () => {
+    const { rowCount } = await getAppPool().query(
+      "SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'confirmed_by'",
+    );
+    expect(rowCount).toBe(0);
   });
 
-  test('a system reporter is fine when a person confirmed', async () => {
-    const e = await withCompany(companyId, (c) =>
+  test('without a user (company-only context) nothing can be recorded', async () => {
+    await expect(
+      withCompany(companyId, (c) => c.query(`INSERT INTO events (${RAW_COLS}) VALUES (${RAW_VALS})`, [companyId, containerId])),
+    ).rejects.toThrow(/row-level security|null value/);
+  });
+
+  test('a user of another company cannot record events in this company', async () => {
+    const intruder = await seedActor('cha');
+    await expect(
+      withActor({ companyId, userId: intruder.userId }, (c) => appendEvent(c, base())),
+    ).rejects.toThrow(/row-level security/);
+  });
+
+  test('a system source is fine: the confirmer is still the acting person', async () => {
+    const e = await withActor(cha, (c) =>
       appendEvent(c, base({ eventType: 'cusdec_lodged', source: { type: 'system', ref: 'intake' }, evidence: { type: 'document', documentId } })),
     );
-    expect(e).toMatchObject({ source: { type: 'system', ref: 'intake' }, confirmedBy: 'synthetic-ops-user' });
+    expect(e).toMatchObject({ source: { type: 'system', ref: 'intake' }, confirmedByUserId: cha.userId });
+  });
+});
+
+describe('users', () => {
+  test('a role must match its company kind', async () => {
+    const bad = (kind: string, role: string) =>
+      withCompany(companyId, (c) =>
+        c.query('INSERT INTO users (company_id, company_kind, role, display_name) VALUES ($1, $2, $3, $4)', [companyId, kind, role, 'Synthetic']),
+      );
+    await expect(bad('cha', 'haulier_dispatcher')).rejects.toThrow(/check constraint|foreign key/);
+    await expect(bad('haulier', 'haulier_dispatcher')).rejects.toThrow(/foreign key/); // company is a CHA
+    await expect(bad('cha', 'driver')).rejects.toThrow(/check constraint/);
+  });
+
+  test('users cannot be changed or removed by the app role', async () => {
+    await expect(withActor(cha, (c) => c.query("UPDATE users SET role = 'client'"))).rejects.toThrow(/permission denied/);
+    await expect(withActor(cha, (c) => c.query('DELETE FROM users'))).rejects.toThrow(/permission denied/);
   });
 });
 
@@ -195,7 +209,7 @@ describe('grants and triggers are exactly as designed', () => {
     );
     const insertable = cols.rows.filter((r) => r.ok).map((r) => r.column_name).sort();
     expect(insertable).toEqual(
-      ['company_id', 'container_id', 'event_type', 'occurred_at', 'source_type', 'source_ref', 'evidence_type', 'message_id', 'document_id', 'evidence_note', 'corrects_event_id', 'payload', 'confirmed_by'].sort(),
+      ['company_id', 'container_id', 'event_type', 'occurred_at', 'source_type', 'source_ref', 'evidence_type', 'message_id', 'document_id', 'evidence_note', 'corrects_event_id', 'payload'].sort(),
     );
   });
 

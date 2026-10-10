@@ -2,15 +2,17 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { dbUrl } from '../src/db/config.ts';
 import { closeAppPool } from '../src/db/pool.ts';
-import { withCompany } from '../src/db/withCompany.ts';
+import { withActor } from '../src/db/withActor.ts';
 import { InvalidContainerNoError } from '../src/domain/iso6346.ts';
 import { EVENT_TYPES } from '../src/domain/statusChain.ts';
 import { appendCorrection, appendEvent, createContainer, currentStatus, listEvents } from '../src/ledger/ledger.ts';
 import type { EventInput } from '../src/ledger/ledger.ts';
-import { seedCompany, seedDocument, seedMessage, validContainerNo } from './helpers.ts';
+import { newBl, seedActor, seedDocument, seedMessage, validContainerNo } from './helpers.ts';
+import type { TestActor } from './helpers.ts';
 
+let cha: TestActor;
+let outsider: TestActor;
 let companyId: string;
-let otherCompanyId: string;
 let messageId: string;
 let documentId: string;
 let owner: pg.Pool;
@@ -24,17 +26,17 @@ function input(containerId: string, eventType: EventInput['eventType'], extra: P
     eventType,
     occurredAt: at('2026-10-12T03:00:00Z'),
     source: person,
-    confirmedBy: 'synthetic-ops-user',
     evidence: { type: 'message', messageId },
     ...extra,
   };
 }
 
 beforeAll(async () => {
-  companyId = await seedCompany('cha');
-  otherCompanyId = await seedCompany('client');
-  messageId = await seedMessage(companyId);
-  documentId = await seedDocument(companyId);
+  cha = await seedActor('cha');
+  outsider = await seedActor('cha');
+  companyId = cha.companyId;
+  messageId = await seedMessage(cha);
+  documentId = await seedDocument(cha);
   owner = new pg.Pool({ connectionString: dbUrl('OWNER_DATABASE_URL'), max: 2 });
 });
 afterAll(async () => {
@@ -44,21 +46,38 @@ afterAll(async () => {
 
 describe('container numbers are validated before saving', () => {
   test('an invalid check digit is rejected and nothing is stored', async () => {
-    await expect(withCompany(companyId, (c) => createContainer(c, { containerNo: 'ZZZU9999999' }))).rejects.toThrow(InvalidContainerNoError);
-    const n = await withCompany(companyId, async (c) => (await c.query("SELECT 1 FROM containers WHERE container_no = 'ZZZU9999999'")).rowCount);
+    await expect(withActor(cha, (c) => createContainer(c, { blNo: newBl(), containerNo: 'ZZZU9999999' }))).rejects.toThrow(InvalidContainerNoError);
+    const n = await withActor(cha, async (c) => (await c.query("SELECT 1 FROM containers WHERE container_no = 'ZZZU9999999'")).rowCount);
     expect(n).toBe(0);
   });
 
   test('the database itself rejects an invalid number (check constraint)', async () => {
     await expect(
-      withCompany(companyId, (c) => c.query("INSERT INTO containers (company_id, container_no) VALUES ($1, 'ZZZU9999999')", [companyId])),
+      withActor(cha, (c) => c.query("INSERT INTO containers (company_id, container_no, bl_no) VALUES ($1, 'ZZZU9999999', 'SYNTHBL000000')", [companyId])),
     ).rejects.toThrow(/container_no/);
   });
 
-  test('a valid lower-case number is stored normalised; duplicates per company are refused', async () => {
-    const c1 = await withCompany(companyId, (c) => createContainer(c, { containerNo: 'zzzu 3456787' }));
+  test('a valid lower-case number is stored normalised', async () => {
+    const c1 = await withActor(cha, (c) => createContainer(c, { blNo: newBl(), containerNo: 'zzzu 3456787' }));
     expect(c1.containerNo).toBe('ZZZU3456787');
-    await expect(withCompany(companyId, (c) => createContainer(c, { containerNo: 'ZZZU3456787' }))).rejects.toThrow(/duplicate|unique/);
+  });
+
+  test('the same consignment (container number + BL) cannot be created twice', async () => {
+    const bl = newBl();
+    await withActor(cha, (c) => createContainer(c, { blNo: bl, containerNo: 'ZZZU2345670' }));
+    await expect(withActor(cha, (c) => createContainer(c, { blNo: bl, containerNo: 'ZZZU2345670' }))).rejects.toThrow(/duplicate|unique/);
+  });
+
+  test('a recycled container number is allowed with a different BL (repeat visit, LCL)', async () => {
+    const no = validContainerNo();
+    await withActor(cha, (c) => createContainer(c, { blNo: newBl(), containerNo: no }));
+    await withActor(cha, (c) => createContainer(c, { blNo: newBl(), containerNo: no, cargoType: 'LCL' }));
+    const n = await withActor(cha, async (c) => (await c.query('SELECT 1 FROM containers WHERE container_no = $1', [no])).rowCount);
+    expect(n).toBe(2);
+  });
+
+  test('a blank BL is rejected', async () => {
+    await expect(withActor(cha, (c) => createContainer(c, { blNo: '  ', containerNo: validContainerNo() }))).rejects.toThrow();
   });
 });
 
@@ -66,8 +85,8 @@ describe('the ledger is append-only', () => {
   let containerId: string;
   let eventId: string;
   beforeAll(async () => {
-    const r = await withCompany(companyId, async (c) => {
-      const cont = await createContainer(c, { containerNo: 'ZZZU1234564' });
+    const r = await withActor(cha, async (c) => {
+      const cont = await createContainer(c, { blNo: newBl(), containerNo: 'ZZZU1234564' });
       const ev = await appendEvent(c, input(cont.id, 'do_received'));
       return { containerId: cont.id, eventId: ev.id };
     });
@@ -75,9 +94,9 @@ describe('the ledger is append-only', () => {
   });
 
   test('UPDATE, DELETE and TRUNCATE are denied to the application role', async () => {
-    await expect(withCompany(companyId, (c) => c.query("UPDATE events SET source_ref = 'x'"))).rejects.toThrow(/permission denied/);
-    await expect(withCompany(companyId, (c) => c.query('DELETE FROM events'))).rejects.toThrow(/permission denied/);
-    await expect(withCompany(companyId, (c) => c.query('TRUNCATE events'))).rejects.toThrow(/permission denied/);
+    await expect(withActor(cha, (c) => c.query("UPDATE events SET source_ref = 'x'"))).rejects.toThrow(/permission denied/);
+    await expect(withActor(cha, (c) => c.query('DELETE FROM events'))).rejects.toThrow(/permission denied/);
+    await expect(withActor(cha, (c) => c.query('TRUNCATE events'))).rejects.toThrow(/permission denied/);
   });
 
   test('UPDATE, DELETE and TRUNCATE are denied to the table owner too (triggers)', async () => {
@@ -87,41 +106,41 @@ describe('the ledger is append-only', () => {
   });
 
   test('the event row is unchanged after the failed attempts', async () => {
-    const events = await withCompany(companyId, (c) => listEvents(c, containerId));
+    const events = await withActor(cha, (c) => listEvents(c, containerId));
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ id: eventId, eventType: 'do_received', source: person, confirmedBy: 'synthetic-ops-user' });
+    expect(events[0]).toMatchObject({ id: eventId, eventType: 'do_received', source: person, confirmedByUserId: cha.userId });
   });
 
   test('a correction is a new event that references the original', async () => {
-    const correction = await withCompany(companyId, (c) =>
+    const correction = await withActor(cha, (c) =>
       appendCorrection(c, eventId, input(containerId, 'do_received', { occurredAt: at('2026-10-12T05:00:00Z'), evidence: { type: 'manual', note: 'DO time corrected from the stamped copy' } })),
     );
     expect(correction.correctsEventId).toBe(eventId);
-    const events = await withCompany(companyId, (c) => listEvents(c, containerId));
+    const events = await withActor(cha, (c) => listEvents(c, containerId));
     expect(events.map((e) => e.id)).toEqual([eventId, correction.id]);
     expect(events[0]!.occurredAt.toISOString()).toBe('2026-10-12T03:00:00.000Z'); // original untouched
-    const status = await withCompany(companyId, (c) => currentStatus(c, containerId));
+    const status = await withActor(cha, (c) => currentStatus(c, containerId));
     expect(status).toMatchObject({ eventId: correction.id, eventType: 'do_received' });
     expect(status!.occurredAt.toISOString()).toBe('2026-10-12T05:00:00.000Z');
   });
 
   test('an event can be corrected only once (chain the correction instead)', async () => {
     await expect(
-      withCompany(companyId, (c) => appendCorrection(c, eventId, input(containerId, 'do_received', { evidence: { type: 'manual', note: 'second' } }))),
+      withActor(cha, (c) => appendCorrection(c, eventId, input(containerId, 'do_received', { evidence: { type: 'manual', note: 'second' } }))),
     ).rejects.toThrow(/duplicate|unique/);
   });
 
   test('a correction must reference an event of the same container and company', async () => {
-    const other = await withCompany(companyId, (c) => createContainer(c, { containerNo: validContainerNo() }));
-    const fresh = await withCompany(companyId, (c) => appendEvent(c, input(containerId, 'cusdec_lodged')));
+    const other = await withActor(cha, (c) => createContainer(c, { blNo: newBl(), containerNo: validContainerNo() }));
+    const fresh = await withActor(cha, (c) => appendEvent(c, input(containerId, 'cusdec_lodged')));
     await expect(
-      withCompany(companyId, (c) => appendCorrection(c, fresh.id, input(other.id, 'cusdec_lodged', { evidence: { type: 'manual', note: 'wrong container' } }))),
+      withActor(cha, (c) => appendCorrection(c, fresh.id, input(other.id, 'cusdec_lodged', { evidence: { type: 'manual', note: 'wrong container' } }))),
     ).rejects.toThrow(/foreign key/);
     await expect(
-      withCompany(companyId, (c) => appendCorrection(c, '11111111-1111-4111-8111-111111111111', input(containerId, 'do_received', { evidence: { type: 'manual', note: 'missing' } }))),
+      withActor(cha, (c) => appendCorrection(c, '11111111-1111-4111-8111-111111111111', input(containerId, 'do_received', { evidence: { type: 'manual', note: 'missing' } }))),
     ).rejects.toThrow(/foreign key/);
     await expect(
-      withCompany(otherCompanyId, (c) => appendCorrection(c, fresh.id, input(containerId, 'cusdec_lodged', { evidence: { type: 'manual', note: 'cross tenant' } }))),
+      withActor(outsider, (c) => appendCorrection(c, fresh.id, input(containerId, 'cusdec_lodged', { evidence: { type: 'manual', note: 'cross tenant' } }))),
     ).rejects.toThrow(/foreign key|row-level security/);
   });
 });
@@ -129,16 +148,16 @@ describe('the ledger is append-only', () => {
 describe('every event records source and evidence', () => {
   let containerId: string;
   beforeAll(async () => {
-    containerId = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+    containerId = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
   });
 
   test('message, document and manual evidence are all accepted', async () => {
-    await withCompany(companyId, async (c) => {
+    await withActor(cha, async (c) => {
       await appendEvent(c, input(containerId, 'cusdec_lodged', { evidence: { type: 'message', messageId } }));
       await appendEvent(c, input(containerId, 'channel_assigned', { evidence: { type: 'document', documentId }, source: { type: 'system', ref: 'intake' } }));
       await appendEvent(c, input(containerId, 'exam', { evidence: { type: 'manual', note: 'Grayline 1 per CHA call' }, payload: { yard: 'Grayline 1' } }));
     });
-    const events = await withCompany(companyId, (c) => listEvents(c, containerId));
+    const events = await withActor(cha, (c) => listEvents(c, containerId));
     expect(events).toHaveLength(3);
     for (const e of events) {
       expect(e.source.ref).toBeTruthy();
@@ -149,10 +168,10 @@ describe('every event records source and evidence', () => {
 
   test('the database refuses evidence that does not match its type', async () => {
     const bad = (evidenceType: string, messageIdArg: string | null, documentIdArg: string | null, note: string | null) =>
-      withCompany(companyId, (c) =>
+      withActor(cha, (c) =>
         c.query(
-          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note, confirmed_by)
-           VALUES ($1, $2, 'gate_pass', now(), 'person', 'u', $3, $4, $5, $6, 'synthetic-ops-user')`,
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, source_type, source_ref, evidence_type, message_id, document_id, evidence_note)
+           VALUES ($1, $2, 'gate_pass', now(), 'person', 'u', $3, $4, $5, $6)`,
           [companyId, containerId, evidenceType, messageIdArg, documentIdArg, note],
         ),
       );
@@ -165,10 +184,10 @@ describe('every event records source and evidence', () => {
 
   test('source is required', async () => {
     await expect(
-      withCompany(companyId, (c) =>
+      withActor(cha, (c) =>
         c.query(
-          `INSERT INTO events (company_id, container_id, event_type, occurred_at, evidence_type, evidence_note, confirmed_by)
-           VALUES ($1, $2, 'gate_pass', now(), 'manual', 'n', 'synthetic-ops-user')`,
+          `INSERT INTO events (company_id, container_id, event_type, occurred_at, evidence_type, evidence_note)
+           VALUES ($1, $2, 'gate_pass', now(), 'manual', 'n')`,
           [companyId, containerId],
         ),
       ),
@@ -176,9 +195,9 @@ describe('every event records source and evidence', () => {
   });
 
   test('an event cannot use evidence from another company', async () => {
-    const foreignMessage = await seedMessage(otherCompanyId);
+    const foreignMessage = await seedMessage(outsider);
     await expect(
-      withCompany(companyId, (c) => appendEvent(c, input(containerId, 'gate_pass', { evidence: { type: 'message', messageId: foreignMessage } }))),
+      withActor(cha, (c) => appendEvent(c, input(containerId, 'gate_pass', { evidence: { type: 'message', messageId: foreignMessage } }))),
     ).rejects.toThrow(/foreign key/);
   });
 });
@@ -186,7 +205,7 @@ describe('every event records source and evidence', () => {
 describe('status chain', () => {
   let containerId: string;
   beforeAll(async () => {
-    containerId = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
+    containerId = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
   });
 
   test('the chain is exactly the documented sequence', () => {
@@ -207,40 +226,40 @@ describe('status chain', () => {
 
   test('a status outside the chain is rejected', async () => {
     await expect(
-      withCompany(companyId, (c) => appendEvent(c, input(containerId, 'invented_status' as EventInput['eventType']))),
+      withActor(cha, (c) => appendEvent(c, input(containerId, 'invented_status' as EventInput['eventType']))),
     ).rejects.toThrow(/check constraint/);
   });
 
   test('every chain status can be stored and current status follows chain order, not arrival order', async () => {
-    const id = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
-    expect(await withCompany(companyId, (c) => currentStatus(c, id))).toBeNull();
+    const id = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
+    expect(await withActor(cha, (c) => currentStatus(c, id))).toBeNull();
     // Messages arrive out of order: gate pass is recorded before the DO.
-    await withCompany(companyId, async (c) => {
+    await withActor(cha, async (c) => {
       await appendEvent(c, input(id, 'gate_pass'));
       await appendEvent(c, input(id, 'do_received'));
     });
-    expect((await withCompany(companyId, (c) => currentStatus(c, id)))!.eventType).toBe('gate_pass');
+    expect((await withActor(cha, (c) => currentStatus(c, id)))!.eventType).toBe('gate_pass');
     for (const t of EVENT_TYPES) {
-      await withCompany(companyId, (c) => appendEvent(c, input(id, t)));
-      expect((await withCompany(companyId, (c) => currentStatus(c, id)))!.eventType).toBe(
+      await withActor(cha, (c) => appendEvent(c, input(id, t)));
+      expect((await withActor(cha, (c) => currentStatus(c, id)))!.eventType).toBe(
         EVENT_TYPES.indexOf(t) >= EVENT_TYPES.indexOf('gate_pass') ? t : 'gate_pass',
       );
     }
   });
 
   test('exam sits between channel assigned and release', async () => {
-    const id = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
-    await withCompany(companyId, async (c) => {
+    const id = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
+    await withActor(cha, async (c) => {
       await appendEvent(c, input(id, 'release_advice'));
       await appendEvent(c, input(id, 'exam'));
     });
-    expect((await withCompany(companyId, (c) => currentStatus(c, id)))!.eventType).toBe('release_advice');
+    expect((await withActor(cha, (c) => currentStatus(c, id)))!.eventType).toBe('release_advice');
   });
 
   test('occurred_at is stored as an instant (UTC)', async () => {
-    const id = await withCompany(companyId, async (c) => (await createContainer(c, { containerNo: validContainerNo() })).id);
-    await withCompany(companyId, (c) => appendEvent(c, input(id, 'delivered', { occurredAt: new Date('2026-10-14T18:45:00+05:30') })));
-    const [e] = await withCompany(companyId, (c) => listEvents(c, id));
+    const id = await withActor(cha, async (c) => (await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() })).id);
+    await withActor(cha, (c) => appendEvent(c, input(id, 'delivered', { occurredAt: new Date('2026-10-14T18:45:00+05:30') })));
+    const [e] = await withActor(cha, (c) => listEvents(c, id));
     expect(e!.occurredAt.toISOString()).toBe('2026-10-14T13:15:00.000Z');
   });
 });
