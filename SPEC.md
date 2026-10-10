@@ -28,6 +28,7 @@ vessel discharged -> DO received -> CusDec lodged -> channel assigned -> (exam, 
 - Exam is an optional event recorded when the channel requires physical inspection. It carries the exam yard (RCT, Grayline 1, Grayline 2) and, later, a result. It is skipped on green channel.
 - Current status is derived from the append-only event ledger. A status is never edited; a correction is a new event referencing the event it corrects.
 - Every event records `source` (person or system) and `evidence` (message id, document id, or manual entry).
+- Every event also records `confirmed_by`: the person who confirmed the suggestion. `source` is the reporter (driver, intake, staff); a system source never confirms on its own.
 
 ## 4. Cargo model
 - **FCL**: one container, one consignee, one status chain.
