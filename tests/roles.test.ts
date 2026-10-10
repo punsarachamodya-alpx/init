@@ -253,7 +253,7 @@ describe('payload cannot carry commercial data (hauliers read events)', () => {
 
   test('whitelisted keys are accepted', async () => {
     const id = await sharedContainer();
-    const e = await ev(cha, id, 'exam', { payload: { yard: 'Grayline 1', note: 'scheduled', scheduled_at: '2026-10-14T10:00:00+05:30' } });
-    expect(e.payload).toEqual({ yard: 'Grayline 1', note: 'scheduled', scheduled_at: '2026-10-14T10:00:00+05:30' });
+    const e = await ev(cha, id, 'exam', { payload: { yard: 'Grayline 1', note: 'scheduled', scheduled_at: '2026-10-14T04:30:00Z' } });
+    expect(e.payload).toEqual({ yard: 'Grayline 1', note: 'scheduled', scheduled_at: '2026-10-14T04:30:00Z' });
   });
 });
