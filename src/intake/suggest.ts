@@ -1,9 +1,9 @@
 import { EVENT_TYPES, EXAM_YARDS, ROLES, eventAllowed } from '../domain/statusChain.ts';
 import type { EventType } from '../domain/statusChain.ts';
 import { InvalidContainerNoError, isValidContainerNo, parseContainerNo } from '../domain/iso6346.ts';
+import { CHANNELS } from '../domain/statusChain.ts';
 import {
   BOOLEAN_FIELDS,
-  CHANNELS,
   DATE_FIELDS,
   DOC_TYPES,
   FIELD_NAMES,

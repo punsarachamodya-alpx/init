@@ -1,5 +1,5 @@
 import type { CompanyClient } from '../db/withCompany.ts';
-import { EVENT_TYPES } from '../domain/statusChain.ts';
+import { EVENT_TYPES, isValidPayloadEntry } from '../domain/statusChain.ts';
 import type { EventPayload, EventType } from '../domain/statusChain.ts';
 import { appendEvent, createContainer } from '../ledger/ledger.ts';
 import type { Container, LedgerEvent } from '../ledger/ledger.ts';
@@ -49,7 +49,8 @@ function payloadFor(eventType: EventType, f: Fields): EventPayload {
   if ((eventType === 'channel_assigned' || eventType === 'exam') && typeof f.exam_scheduled_at === 'string') {
     payload.scheduled_at = new Date(f.exam_scheduled_at).toISOString();
   }
-  return payload;
+  // Only values the ledger accepts (a B/L with spaces, say, is left out of the payload; it is still on the container).
+  return Object.fromEntries(Object.entries(payload).filter(([k, v]) => isValidPayloadEntry(k, v))) as EventPayload;
 }
 
 export async function confirmSuggestion(

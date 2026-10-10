@@ -30,7 +30,7 @@ export const BOOLEAN_FIELDS: readonly FieldName[] = ['freight_paid'];
 export const DOC_TYPES = ['delivery_order', 'delivery_advice', 'cusdec_summary', 'other'] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 
-export const CHANNELS = ['green', 'yellow', 'red', 'blue'] as const;
+export { CHANNELS } from '../domain/statusChain.ts';
 
 export type FieldValue = string | boolean;
 /** Validated, normalised, non-null fields. */

@@ -43,10 +43,33 @@ export function eventAllowed(role: string, type: EventType): boolean {
   return (ROLE_EVENT_TYPES as Record<string, readonly EventType[] | undefined>)[role]?.includes(type) ?? false;
 }
 
+export const CHANNELS = ['green', 'yellow', 'red', 'blue'] as const;
+
 /**
- * Keys allowed in an event payload. Hauliers can read events, so the payload must never carry
- * commercial data (freight, demurrage, tariffs, prices). Mirrors payload_ok() in the database.
+ * Keys allowed in an event payload, with value rules. Hauliers can read events, so the payload is
+ * constrained by shape, not just by key name (mirrors payload_ok() in db/migrations/0009_payload_rules.sql;
+ * tests/payloadRules.test.ts checks both agree). Free text is still human-entered and visible to
+ * hauliers: never enter prices or charges there.
  */
 export const PAYLOAD_KEYS = ['yard', 'result', 'note', 'scheduled_at', 'pickup_window', 'reference'] as const;
 export type PayloadKey = (typeof PAYLOAD_KEYS)[number];
-export type EventPayload = Partial<Record<PayloadKey, string | number | boolean | null>>;
+export type EventPayload = Partial<Record<PayloadKey, string>>;
+
+const ISO_UTC = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z`;
+const RULES: Record<PayloadKey, (v: string) => boolean> = {
+  yard: (v) => (EXAM_YARDS as readonly string[]).includes(v),
+  result: (v) => (CHANNELS as readonly string[]).includes(v),
+  scheduled_at: (v) => new RegExp(`^${ISO_UTC}$`).test(v),
+  pickup_window: (v) => new RegExp(`^${ISO_UTC}/${ISO_UTC}$`).test(v),
+  reference: (v) => /^[A-Za-z0-9._/-]{1,64}$/.test(v),
+  note: (v) => [...v].length <= 140,
+};
+
+export function isValidPayloadEntry(key: string, value: unknown): boolean {
+  return (PAYLOAD_KEYS as readonly string[]).includes(key) && typeof value === 'string' && RULES[key as PayloadKey](value);
+}
+
+export function isValidPayload(p: unknown): boolean {
+  if (typeof p !== 'object' || p === null || Array.isArray(p)) return false;
+  return Object.entries(p).every(([k, v]) => isValidPayloadEntry(k, v));
+}
