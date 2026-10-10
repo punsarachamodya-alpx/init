@@ -9,12 +9,15 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 /** The slice of the SDK client the extractor uses (lets tests inject a fake). */
 export interface MessagesClient {
   messages: {
-    create(params: Record<string, unknown>): Promise<{
+    create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<{
       stop_reason: string | null;
       content: Array<{ type: string; text?: string }>;
     }>;
   };
 }
+
+/** The text is data: escape angle brackets so it cannot close or fake the delimiter tags. */
+const escapeAngles = (text: string) => text.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const nullableString = (v: unknown): string | null | undefined => (v === null || typeof v === 'string' ? v : undefined);
@@ -52,15 +55,16 @@ export class ClaudeExtractor implements Extractor {
   }
 
   async extract(input: ExtractionInput): Promise<RawExtraction> {
+    const params: Anthropic.MessageCreateParamsNonStreaming = {
+      model: this.model,
+      max_tokens: 2000,
+      system: SYSTEM_PROMPT,
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: EXTRACTION_JSON_SCHEMA } },
+      messages: [{ role: 'user', content: `<${input.kind}>\n${escapeAngles(input.text)}\n</${input.kind}>` }],
+    };
     let response;
     try {
-      response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 2000,
-        system: SYSTEM_PROMPT,
-        output_config: { effort: 'low', format: { type: 'json_schema', schema: EXTRACTION_JSON_SCHEMA } },
-        messages: [{ role: 'user', content: `<${input.kind}>\n${input.text}\n</${input.kind}>` }],
-      });
+      response = await this.client.messages.create(params);
     } catch (cause) {
       throw new ExtractionFailedError('api_error', { cause });
     }

@@ -4,6 +4,7 @@ import type { EventPayload, EventType } from '../domain/statusChain.ts';
 import { appendEvent, createContainer } from '../ledger/ledger.ts';
 import type { Container, LedgerEvent } from '../ledger/ledger.ts';
 import { normaliseFields } from './suggest.ts';
+import { FIELD_NAMES } from './types.ts';
 import type { Fields, Suggestion } from './types.ts';
 
 // The ONLY module in src/intake that writes to the ledger (tests/intake.test.ts enforces this).
@@ -16,6 +17,7 @@ export type ConfirmationErrorCode =
   | 'container_required'
   | 'event_type_required'
   | 'occurred_at_required'
+  | 'occurred_at_invalid'
   | 'container_not_found'
   | 'ambiguous_container'
   | 'duplicate';
@@ -62,7 +64,15 @@ export async function confirmSuggestion(
     throw new ConfirmationError('event_type_required', 'choose a status from the import chain');
   }
 
-  const missing = Object.keys(suggestion.fields).filter((k) => !(k in confirmation.fields));
+  const unknown = Object.keys(confirmation.fields).filter((k) => !(FIELD_NAMES as readonly string[]).includes(k));
+  if (unknown.length > 0) throw new ConfirmationError('invalid_field', `unknown field(s): ${unknown.join(', ')}`);
+
+  // Acknowledging a field means giving it a value: a string or boolean, not null, undefined or blank.
+  const given = (k: string) => {
+    const v = (confirmation.fields as Record<string, unknown>)[k];
+    return typeof v === 'boolean' || (typeof v === 'string' && v.trim() !== '');
+  };
+  const missing = Object.keys(suggestion.fields).filter((k) => !given(k));
   if (missing.length > 0) {
     throw new ConfirmationError('fields_not_acknowledged', `confirm or correct every extracted field; missing: ${missing.join(', ')}`);
   }
@@ -75,6 +85,11 @@ export async function confirmSuggestion(
 
   const occurredAt = confirmation.occurredAt ?? suggestion.suggestedOccurredAt;
   if (!occurredAt) throw new ConfirmationError('occurred_at_required', 'say when this happened');
+  const t = occurredAt instanceof Date ? occurredAt.getTime() : NaN;
+  if (!Number.isFinite(t) || t < Date.UTC(2000, 0, 1) || t > Date.now() + 366 * 86_400_000) {
+    // Up to a year ahead is allowed (a scheduled exam lies in the future); absurd years are not.
+    throw new ConfirmationError('occurred_at_invalid', 'the event time must be a real date between 2000 and one year from now');
+  }
 
   // Resolve the container among those the acting user can see.
   const blNo = typeof fields.bl_no === 'string' ? fields.bl_no : null;
@@ -87,7 +102,7 @@ export async function confirmSuggestion(
   const row = found.rows[0];
   if (row) {
     container = { id: row.id, containerNo: row.container_no, blNo: row.bl_no, cargoType: row.cargo_type };
-  } else if (confirmation.createContainer && blNo) {
+  } else if (confirmation.createContainer === true && blNo) {
     container = await createContainer(c, { containerNo: fields.container_no, blNo });
   } else {
     throw new ConfirmationError('container_not_found', 'no visible container with this number; ask the CHA to create it');

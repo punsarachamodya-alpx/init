@@ -5,20 +5,22 @@
 // Exit code: 0 no misses, 1 misses, 2 cannot run.
 import path from 'node:path';
 import { ClaudeExtractor, DEFAULT_MODEL } from '../src/intake/claudeExtractor.ts';
-import { dryRunExtractor, evaluate, formatReport, loadEvalItems } from '../src/intake/eval/index.ts';
+import { EvalAbortedError, dryRunExtractor, evaluate, formatReport, loadEvalItems, resolveLabelsPath } from '../src/intake/eval/index.ts';
 
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
-const labels = arg('labels') ?? path.resolve(import.meta.dirname, '../fixtures/labels.json');
+const labels = resolveLabelsPath(arg('labels'), path.resolve(import.meta.dirname, '../fixtures')); // inside fixtures/ only
 const items = loadEvalItems(labels);
 
 const dry = arg('dry-run');
 let extractor;
+let label: string;
 if (dry) {
   if (dry !== 'oracle' && dry !== 'flawed') {
     console.error('--dry-run must be oracle or flawed');
     process.exit(2);
   }
   console.log(`DRY RUN (${dry}): fake extractor, proves the scorer only. These are NOT model results.\n`);
+  label = `DRY RUN (${dry}) - NOT MODEL RESULTS`;
   extractor = dryRunExtractor(dry, items);
 } else {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
@@ -28,9 +30,18 @@ if (dry) {
   }
   const model = process.env.INTAKE_MODEL ?? DEFAULT_MODEL;
   console.log(`REAL RUN: model ${model}, ${items.length} synthetic items.\n`);
+  label = `REAL RUN (${model})`;
   extractor = new ClaudeExtractor({ model });
 }
 
-const report = await evaluate(items, extractor);
-console.log(formatReport(report));
-process.exit(report.misses.length === 0 ? 0 : 1);
+try {
+  const report = await evaluate(items, extractor, { label });
+  console.log(formatReport(report));
+  process.exit(report.misses.length === 0 ? 0 : 1);
+} catch (err) {
+  if (err instanceof EvalAbortedError) {
+    console.error(err.message);
+    process.exit(2);
+  }
+  throw err;
+}

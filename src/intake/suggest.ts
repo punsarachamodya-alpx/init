@@ -1,6 +1,6 @@
 import { EVENT_TYPES, EXAM_YARDS, ROLES, eventAllowed } from '../domain/statusChain.ts';
 import type { EventType } from '../domain/statusChain.ts';
-import { InvalidContainerNoError, normalizeContainerNo, parseContainerNo } from '../domain/iso6346.ts';
+import { InvalidContainerNoError, isValidContainerNo, parseContainerNo } from '../domain/iso6346.ts';
 import {
   BOOLEAN_FIELDS,
   CHANNELS,
@@ -30,8 +30,10 @@ const COLOMBO_OFFSET = '+05:30';
 const issue = (code: string, severity: Issue['severity'], message: string, field?: FieldName): Issue =>
   field ? { code, severity, message, field } : { code, severity, message };
 
+const MIN_YEAR = 2000;
+
 function validCalendarDate(y: number, m: number, d: number): boolean {
-  if (m < 1 || m > 12 || d < 1) return false;
+  if (y < MIN_YEAR || y > 2100 || m < 1 || m > 12 || d < 1) return false;
   const dim = [31, y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]!;
   return d <= dim;
 }
@@ -55,6 +57,46 @@ function parseTimestamp(v: string): { value: string; assumedOffset: boolean } | 
 }
 
 const cleanText = (v: string) => v.replace(/\s+/g, ' ').trim();
+
+// --- Trusted scan of the source text -------------------------------------------------------------
+// Container-shaped tokens: 4 letters (4th is U, J or Z per ISO 6346) + 6 digits + check digit, with at
+// most one space or hyphen in each gap, delimited so they are not part of a longer alphanumeric run.
+const CONTAINER_TOKEN = /(?<![A-Za-z0-9])([A-Za-z]{3}[UJZujz])[ -]?(\d{6})[ -]?(\d)(?![A-Za-z0-9])/g;
+
+export function scanContainerTokens(text: string): { valid: string[]; invalid: string[] } {
+  const valid = new Set<string>();
+  const invalid = new Set<string>();
+  for (const m of text.matchAll(CONTAINER_TOKEN)) {
+    const token = `${m[1]}${m[2]}${m[3]}`.toUpperCase();
+    (isValidContainerNo(token) ? valid : invalid).add(token);
+  }
+  return { valid: [...valid], invalid: [...invalid] };
+}
+
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+
+/** Common ways a YYYY-MM-DD date is printed (day-first, ISO, month names). */
+function dateRenderings(isoDate: string): string[] {
+  const [y, m, d] = isoDate.split('-').map(Number) as [number, number, number];
+  const dd = String(d).padStart(2, '0');
+  const mm = String(m).padStart(2, '0');
+  const name = MONTHS[m - 1]!;
+  const abbr = name.slice(0, 3);
+  return [
+    `${y}-${mm}-${dd}`, `${y}/${mm}/${dd}`,
+    `${dd}/${mm}/${y}`, `${d}/${m}/${y}`, `${dd}-${mm}-${y}`, `${dd}.${mm}.${y}`,
+    `${d} ${name} ${y}`, `${dd} ${abbr} ${y}`, `${d} ${abbr} ${y}`, `${d}-${abbr}-${y}`, `${dd}-${abbr}-${y}`,
+    `${name} ${d}, ${y}`, `${abbr} ${d}, ${y}`, `${name} ${d} ${y}`,
+  ];
+}
+
+const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+function containsToken(text: string, token: string): boolean {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, 'i').test(text);
+}
+
 
 /**
  * Normalise and validate raw field values. `sourceText` (extraction only) enables the grounding
@@ -90,20 +132,28 @@ export function normaliseFields(
         issues.push(issue('invalid_container_no', 'error', `"${cleanText(value)}" is not a valid ISO 6346 container number (check digit or format)`, name));
         continue;
       }
-      if (opts.sourceText !== undefined && !normalizeContainerNo(opts.sourceText).includes(parsed)) {
-        issues.push(issue('ungrounded_container_no', 'warning', `${parsed} does not appear in the source text`, name));
+      if (opts.sourceText !== undefined && !scanContainerTokens(opts.sourceText).valid.includes(parsed)) {
+        issues.push(issue('ungrounded_container_no', 'warning', `${parsed} does not appear in the source text as a container number`, name));
         continue;
       }
       fields[name] = parsed;
     } else if (DATE_FIELDS.includes(name)) {
       const d = parseDateOnly(value);
-      if (d) fields[name] = d;
-      else issues.push(issue('invalid_date', 'warning', `${name}: "${value}" is not a YYYY-MM-DD date`, name));
+      if (!d) issues.push(issue('invalid_date', 'warning', `${name}: "${value}" is not a YYYY-MM-DD date`, name));
+      else {
+        fields[name] = d;
+        if (opts.sourceText !== undefined && !groundedDate(opts.sourceText, d)) {
+          issues.push(issue('ungrounded_date', 'warning', `${name}: ${d} does not appear in the source text; check it`, name));
+        }
+      }
     } else if (TIMESTAMP_FIELDS.includes(name)) {
       const t = parseTimestamp(value);
       if (!t) issues.push(issue('invalid_date', 'warning', `${name}: "${value}" is not an ISO 8601 timestamp`, name));
       else {
         fields[name] = t.value;
+        if (opts.sourceText !== undefined && !groundedDate(opts.sourceText, t.value.slice(0, 10))) {
+          issues.push(issue('ungrounded_date', 'warning', `${name}: ${t.value.slice(0, 10)} does not appear in the source text; check it`, name));
+        }
         if (t.assumedOffset) issues.push(issue('assumed_colombo_time', 'info', `${name}: no offset given, assumed Asia/Colombo (+05:30)`, name));
       }
     } else if (name === 'channel') {
@@ -114,11 +164,25 @@ export function normaliseFields(
       const yard = EXAM_YARDS.find((y) => y.toLowerCase() === cleanText(value).toLowerCase());
       if (yard) fields[name] = yard;
       else issues.push(issue('unknown_exam_yard', 'warning', `unknown exam yard "${value}"`, name));
+    } else if (name === 'bl_no') {
+      const bl = cleanText(value);
+      if (opts.sourceText !== undefined && !containsToken(opts.sourceText, bl)) {
+        issues.push(issue('ungrounded_bl_no', 'warning', `B/L ${bl} does not appear in the source text`, name));
+      } else fields[name] = bl;
     } else {
-      fields[name] = cleanText(value);
+      const v = cleanText(value);
+      fields[name] = v;
+      if ((name === 'vessel' || name === 'voyage') && opts.sourceText !== undefined && !squash(opts.sourceText).includes(squash(v))) {
+        issues.push(issue('ungrounded_value', 'warning', `${name} "${v}" does not appear in the source text; check it`, name));
+      }
     }
   }
   return { fields, issues };
+}
+
+function groundedDate(text: string, isoDate: string): boolean {
+  const hay = text.toLowerCase();
+  return dateRenderings(isoDate).some((r) => hay.includes(r.toLowerCase()));
 }
 
 /** When the event happened, as far as the extracted fields say (the confirmer can change it). */
@@ -144,6 +208,17 @@ function confirmableBy(eventType: EventType | null) {
 
 export function buildSuggestion(raw: RawExtraction, input: ExtractionInput, evidence: SuggestionEvidence): Suggestion {
   const { fields, issues } = normaliseFields(raw.fields, { sourceText: input.text });
+
+  // The model is not trusted to report a bad container: scan the text itself.
+  const scan = scanContainerTokens(input.text);
+  for (const bad of scan.invalid) {
+    if (!issues.some((i) => i.code === 'invalid_container_no' && i.message.includes(bad))) {
+      issues.push(issue('invalid_container_no', 'error', `"${bad}" in the text is not a valid ISO 6346 container number (check digit)`, 'container_no'));
+    }
+  }
+  if (scan.valid.length > 1) {
+    issues.push(issue('multiple_containers', 'warning', `the text mentions several containers (${scan.valid.join(', ')}); pick one`, 'container_no'));
+  }
 
   let eventType: EventType | null = null;
   if (raw.suggestedEvent !== null && raw.suggestedEvent !== undefined) {

@@ -1,8 +1,9 @@
 import { EVENT_TYPES } from '../domain/statusChain.ts';
 import { BOOLEAN_FIELDS, DOC_TYPES, FIELD_NAMES } from './types.ts';
 
-const nullableString = { type: ['string', 'null'] } as const;
-const nullableBoolean = { type: ['boolean', 'null'] } as const;
+const NULL = { type: 'null' } as const;
+const nullableString = { anyOf: [{ type: 'string' }, NULL] } as const;
+const nullableBoolean = { anyOf: [{ type: 'boolean' }, NULL] } as const;
 
 /** JSON schema for structured output (`output_config.format`). Closed: every field required, nullable. */
 export const EXTRACTION_JSON_SCHEMA = {
@@ -10,8 +11,8 @@ export const EXTRACTION_JSON_SCHEMA = {
   additionalProperties: false,
   required: ['doc_type', 'suggested_event', 'language', 'fields', 'notes'],
   properties: {
-    doc_type: { type: ['string', 'null'], enum: [...DOC_TYPES, null] },
-    suggested_event: { type: ['string', 'null'], enum: [...EVENT_TYPES, null] },
+    doc_type: { anyOf: [{ type: 'string', enum: [...DOC_TYPES] }, NULL] },
+    suggested_event: { anyOf: [{ type: 'string', enum: [...EVENT_TYPES] }, NULL] },
     language: nullableString,
     notes: nullableString,
     fields: {

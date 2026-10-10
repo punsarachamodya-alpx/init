@@ -175,7 +175,8 @@ describe('the event time and container creation are validated', () => {
     ['an Invalid Date', new Date('nonsense')],
     ['year 1', new Date('0001-01-01T00:00:00Z')],
     ['before 2000', new Date('1999-12-31T00:00:00Z')],
-    ['next month', new Date(Date.now() + 30 * day)],
+    ['two years ahead', new Date(Date.now() + 730 * day)],
+    ['year 9999', new Date('9999-12-31T00:00:00Z')],
   ])('%s is refused', async (_n, occurredAt) => {
     const s = await suggest(cha, DO_RAW());
     await expect(

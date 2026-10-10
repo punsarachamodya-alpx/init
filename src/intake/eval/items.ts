@@ -41,3 +41,11 @@ export function loadEvalItems(labelsPath: string): EvalItem[] {
   }));
   return [...docs, ...msgs];
 }
+
+/** A labels file for the eval must live inside fixtures/ (the API only ever sees synthetic fixtures). */
+export function resolveLabelsPath(requested: string | undefined, fixturesDir: string): string {
+  const root = path.resolve(fixturesDir);
+  const resolved = path.resolve(root, requested ?? 'labels.json');
+  if (!resolved.startsWith(root + path.sep)) throw new Error(`labels file must be inside fixtures/: ${requested}`);
+  return resolved;
+}

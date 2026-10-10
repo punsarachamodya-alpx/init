@@ -22,6 +22,8 @@ export interface ItemResult {
   passedEvent: boolean;
 }
 export interface EvalReport {
+  /** What kind of run this is, e.g. 'REAL RUN (model)' or 'DRY RUN (oracle) - NOT MODEL RESULTS'. */
+  label: string;
   items: ItemResult[];
   perField: Record<FieldName, FieldScore>;
   event: FieldScore;
@@ -42,10 +44,25 @@ function sameValue(field: string, expected: unknown, got: unknown): boolean {
   return norm(expected) === norm(got);
 }
 
+/** The run cannot be scored (bad key, rejected schema, unusable output). Never a score of 0%. */
+export class EvalAbortedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EvalAbortedError';
+  }
+}
+
+function abortMessage(itemId: string, err: ExtractionFailedError): string {
+  const cause = err.cause as { status?: number; message?: string } | undefined;
+  const detail = [cause?.status ? `HTTP ${cause.status}` : null, cause?.message].filter(Boolean).join(': ').slice(0, 300);
+  return `eval aborted on ${itemId}: ${err.reason}${detail ? ` (${detail})` : ''}. Nothing was scored.`; // never includes request text
+}
+
 /** Run the extractor and the deterministic checks over every item, then score against the labels. */
-export async function evaluate(items: EvalItem[], extractor: Extractor): Promise<EvalReport> {
+export async function evaluate(items: EvalItem[], extractor: Extractor, opts: { label: string }): Promise<EvalReport> {
   const perField = Object.fromEntries(FIELD_NAMES.map((f) => [f, { correct: 0, total: 0 }])) as Record<FieldName, FieldScore>;
   const report: EvalReport = {
+    label: opts.label,
     items: [],
     perField,
     event: { correct: 0, total: 0 },
@@ -62,17 +79,20 @@ export async function evaluate(items: EvalItem[], extractor: Extractor): Promise
       suggestion = buildSuggestion(await extractor.extract(input), input, evidence);
     } catch (err) {
       if (!(err instanceof ExtractionFailedError)) throw err;
+      // Infrastructure problems would score every item as a miss: stop instead of reporting 0%.
+      if (err.reason === 'api_error' || err.reason === 'invalid_output') throw new EvalAbortedError(abortMessage(item.id, err));
       suggestion = failedSuggestion(err.reason, evidence);
     }
 
     // event
     report.event.total++;
-    const passedEvent = item.expectedEvent === null ? suggestion.status !== 'ready' : suggestion.eventType === item.expectedEvent;
+    const rejectedForContainer = suggestion.status === 'rejected' && suggestion.issues.some((i) => i.code === 'invalid_container_no');
+    const passedEvent = item.expectedEvent === null ? rejectedForContainer : suggestion.eventType === item.expectedEvent;
     if (passedEvent) report.event.correct++;
     else {
       report.misses.push(
         item.expectedEvent === null
-          ? { item: item.id, field: 'status', expected: 'not ready (rejected or needs review)', got: suggestion.status }
+          ? { item: item.id, field: 'status', expected: 'rejected (invalid_container_no)', got: suggestion.status }
           : { item: item.id, field: 'event', expected: item.expectedEvent, got: suggestion.eventType },
       );
     }
@@ -104,7 +124,7 @@ const pct = (s: FieldScore) => (s.total === 0 ? '  n/a' : `${((100 * s.correct) 
 
 export function formatReport(r: EvalReport): string {
   const lines: string[] = [];
-  lines.push('INTAKE EXTRACTION EVAL');
+  lines.push(`INTAKE EXTRACTION EVAL - ${r.label}`);
   lines.push('');
   lines.push('PER-FIELD ACCURACY (labelled fields only)');
   for (const f of FIELD_NAMES) {
@@ -124,6 +144,9 @@ export function formatReport(r: EvalReport): string {
   lines.push(`MISSES (${r.misses.length})`);
   if (r.misses.length === 0) lines.push('  none');
   for (const m of r.misses) lines.push(`  ${m.item} ${m.field}: expected ${JSON.stringify(m.expected)}, got ${JSON.stringify(m.got)}`);
+  lines.push('');
+  lines.push(`unlabelled extras: ${r.extras.length} (informational, not scored)`);
+  lines.push('Matching: case-insensitive, whitespace-collapsed; timestamps compared as instants. Scored on the suggestion after the deterministic checks, not on raw model output.');
   if (r.extras.length > 0) {
     lines.push('');
     lines.push(`UNLABELLED EXTRAS (${r.extras.length}, informational)`);

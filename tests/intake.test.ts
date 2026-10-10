@@ -264,8 +264,8 @@ describe('ClaudeExtractor request shape', () => {
   type Params = Record<string, unknown>;
   const clientReturning = (response: unknown, spy: Params[] = []): MessagesClient => ({
     messages: {
-      create: async (params: Params) => {
-        spy.push(params);
+      create: async (params) => {
+        spy.push(params as unknown as Params);
         if (response instanceof Error) throw response;
         return response as Awaited<ReturnType<MessagesClient['messages']['create']>>;
       },
