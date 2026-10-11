@@ -189,7 +189,7 @@ describe('contacts and the outbox follow the sharing rules', () => {
   });
 
   test('a sender can address its own users and its current grantees, nobody else', async () => {
-    const c = await sharedContainer();
+    await sharedContainer();
     const enq = (recipient: { companyId: string; userId: string }, params: Record<string, string> = { container: 'ZZZU1234564', status: 'delivered' }) =>
       withActor(cha, (cl) => enqueueNotification(cl, { kind: 'client_status', recipientCompanyId: recipient.companyId, recipientUserId: recipient.userId, params: params as never }));
     await expect(enq(client)).resolves.toBeTruthy();
