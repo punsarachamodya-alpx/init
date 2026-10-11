@@ -61,6 +61,24 @@ describe('extractor selection', () => {
     expect(selectExtractor({ NODE_ENV: 'development', INTAKE_EXTRACTOR: 'fake' })).toBeInstanceOf(RuleExtractor);
   });
 
+  test('an API key alone does not send pasted text to the model: it needs INTAKE_ALLOW_REAL_API=1', async () => {
+    const { UnavailableExtractor } = await import('../src/web/extractor.ts');
+    const { ClaudeExtractor } = await import('../src/intake/claudeExtractor.ts');
+    const { extractorLabel } = await import('../src/web/extractor.ts');
+    const withKey = { NODE_ENV: 'development', ANTHROPIC_API_KEY: 'sk-test-not-real' };
+    expect(selectExtractor(withKey)).toBeInstanceOf(UnavailableExtractor);
+    expect(selectExtractor({ ...withKey, INTAKE_ALLOW_REAL_API: 'yes' })).toBeInstanceOf(UnavailableExtractor); // exactly "1"
+    expect(extractorLabel(withKey)).toBe('none');
+    const saved = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-test-not-real'; // the SDK client reads it when constructed; nothing is sent
+    try {
+      expect(selectExtractor({ ...withKey, INTAKE_ALLOW_REAL_API: '1' })).toBeInstanceOf(ClaudeExtractor);
+    } finally {
+      if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = saved;
+    }
+  });
+
   test('with neither a key nor the fake, extraction fails cleanly (intake stores a failed suggestion; staff use manual entry)', async () => {
     const ex = selectExtractor({ NODE_ENV: 'development' });
     await expect(ex.extract({ kind: 'message', text: 'ZZZU1234564 DO kittu' })).rejects.toBeInstanceOf(ExtractionFailedError);

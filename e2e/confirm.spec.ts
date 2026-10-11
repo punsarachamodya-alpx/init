@@ -39,3 +39,9 @@ test('a suggestion whose container is not in the text is refused, and nothing is
   await page.goto('/');
   await expect(page.getByTestId(`container-${containerNo}`)).toHaveCount(0);
 });
+
+test('the manual-entry form warns that the reason is visible to hauliers', async ({ page }) => {
+  await signIn(page, 'CHA ops');
+  await page.goto('/inbox');
+  await expect(page.getByTestId('manual-reason-hint')).toHaveText(en['manual.reason_hint']);
+});

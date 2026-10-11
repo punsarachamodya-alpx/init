@@ -140,5 +140,6 @@
   "issue.unknown_channel": "The customs channel was not recognised.",
   "issue.unknown_event_type": "The status was not recognised.",
   "issue.unknown_exam_yard": "The exam yard was not recognised.",
-  "issue.other": "Something in the text needs checking."
+  "issue.other": "Something in the text needs checking.",
+  "manual.reason_hint": "Visible to hauliers on their containers. Do not enter prices or charges."
 }

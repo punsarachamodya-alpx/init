@@ -2,12 +2,13 @@ import { redirect } from 'next/navigation';
 import { LOCALES } from '../../src/i18n/index.ts';
 import { loadDemoUsers } from '../../src/web/demoUsers.ts';
 import { loginAction, setLocaleAction } from '../actions.ts';
-import { getActor, getLocale, translator } from '../lib/context.ts';
+import { getLocale, getViewer, translator } from '../lib/context.ts';
 
 export const dynamic = 'force-dynamic';
 
 export default async function LoginPage() {
-  if (await getActor()) redirect('/');
+  // Only a cookie whose user still exists skips the picker: a stale cookie must not bounce between / and /login.
+  if (await getViewer()) redirect('/');
   const locale = await getLocale();
   const tr = translator(locale);
   const users = loadDemoUsers(); // throws in production: the picker is a development convenience

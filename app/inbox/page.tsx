@@ -143,7 +143,8 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           </div>
         </div>
         <label>{tr('manual.reason')}</label>
-        <input type="text" name="reason" required maxLength={200} data-testid="manual-reason" />
+        <input type="text" name="reason" required maxLength={200} data-testid="manual-reason" aria-describedby="reason-hint" />
+        <p id="reason-hint" className="muted" data-testid="manual-reason-hint">{tr('manual.reason_hint')}</p>
         {viewer.role === 'cha_ops' ? <label><input type="checkbox" name="createContainer" data-testid="manual-create" /> {tr('inbox.create_container')}</label> : null}
         <div className="actions">
           <button type="submit" className="primary" data-testid="manual-submit">{tr('manual.submit')}</button>

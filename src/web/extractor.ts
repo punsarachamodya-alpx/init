@@ -44,18 +44,26 @@ export class RuleExtractor implements Extractor {
   }
 }
 
-/** Real model when ANTHROPIC_API_KEY is set; the rule-based fake only when asked for, never in production; otherwise manual entry. */
-export function selectExtractor(env: { NODE_ENV?: string; INTAKE_EXTRACTOR?: string; ANTHROPIC_API_KEY?: string } = process.env): Extractor {
+type ExtractorEnv = { NODE_ENV?: string | undefined; INTAKE_EXTRACTOR?: string | undefined; ANTHROPIC_API_KEY?: string | undefined; INTAKE_ALLOW_REAL_API?: string | undefined; INTAKE_MODEL?: string | undefined };
+
+/** Pasted text leaves the machine only when a key is set AND INTAKE_ALLOW_REAL_API is exactly "1" (set it only for synthetic data, or after the PDPA review). */
+const realApiAllowed = (env: ExtractorEnv) => Boolean(env.ANTHROPIC_API_KEY) && env.INTAKE_ALLOW_REAL_API === '1';
+
+/**
+ * The model only when a key is set and INTAKE_ALLOW_REAL_API=1 (a key alone is not consent to send what staff paste:
+ * it may be real data); the rule-based fake only when asked for, never in production; otherwise manual entry.
+ */
+export function selectExtractor(env: ExtractorEnv = process.env): Extractor {
   if (env.INTAKE_EXTRACTOR === 'fake') {
     if (env.NODE_ENV === 'production') throw new Error('INTAKE_EXTRACTOR=fake is not allowed in production');
     return new RuleExtractor();
   }
-  if (env.ANTHROPIC_API_KEY) return new ClaudeExtractor();
+  if (realApiAllowed(env)) return new ClaudeExtractor();
   return new UnavailableExtractor();
 }
 
 /** What is stored as the suggestion's `extractor` label. */
-export function extractorLabel(env: { NODE_ENV?: string | undefined; INTAKE_EXTRACTOR?: string | undefined; ANTHROPIC_API_KEY?: string | undefined; INTAKE_MODEL?: string | undefined } = process.env): string {
+export function extractorLabel(env: ExtractorEnv = process.env): string {
   if (env.INTAKE_EXTRACTOR === 'fake') return 'rules-fake';
-  return env.ANTHROPIC_API_KEY ? (env.INTAKE_MODEL ?? 'claude') : 'none';
+  return realApiAllowed(env) ? (env.INTAKE_MODEL ?? 'claude') : 'none';
 }

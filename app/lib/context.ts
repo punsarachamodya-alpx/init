@@ -33,17 +33,34 @@ export async function getActor(): Promise<Actor | null> {
   return verifySession(token, sessionSecret());
 }
 
-/** The signed-in user with their role and company read from the database (never from the cookie); else to /login. */
-export async function requireViewer(): Promise<Viewer> {
+/**
+ * The signed-in user with their role and company read from the database (never from the cookie), or null when there
+ * is no valid cookie, the user no longer exists, or the database rejects the actor token (rotated key, clock skew).
+ */
+export async function getViewer(): Promise<Viewer | null> {
   const actor = await getActor();
-  if (!actor) redirect('/login');
-  const row = await withActor(actor, async (c) => {
-    const { rows } = await c.query<{ display_name: string; role: string; name: string }>(
-      'SELECT u.display_name, u.role, co.name FROM users u JOIN companies co ON co.company_id = u.company_id WHERE u.id = app_user_id()',
-    );
-    return rows[0];
-  });
-  if (!row || !(ROLES as readonly string[]).includes(row.role)) redirect('/login');
+  if (!actor) return null;
+  let row: { display_name: string; role: string; name: string } | undefined;
+  try {
+    row = await withActor(actor, async (c) => {
+      const { rows } = await c.query<{ display_name: string; role: string; name: string }>(
+        'SELECT u.display_name, u.role, co.name FROM users u JOIN companies co ON co.company_id = u.company_id WHERE u.id = app_user_id()',
+      );
+      return rows[0];
+    });
+  } catch (err) {
+    // The database refused the signed token (ActorContextError, by name: src/db/actorToken is not importable here).
+    if (err instanceof Error && err.name === 'ActorContextError') return null;
+    throw err;
+  }
+  if (!row || !(ROLES as readonly string[]).includes(row.role)) return null;
   const locale = await getLocale();
   return { actor, displayName: row.display_name, role: row.role as RoleName, companyName: row.name, locale, tr: translator(locale) };
+}
+
+/** Signed-in viewer, else to /login. */
+export async function requireViewer(): Promise<Viewer> {
+  const viewer = await getViewer();
+  if (!viewer) redirect('/login');
+  return viewer;
 }
