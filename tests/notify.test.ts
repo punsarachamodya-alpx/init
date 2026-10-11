@@ -9,7 +9,7 @@ import { LOCALES, t } from '../src/i18n/index.ts';
 import type { Locale } from '../src/i18n/index.ts';
 import { intakeAndStore } from '../src/intake/index.ts';
 import type { Extractor } from '../src/intake/index.ts';
-import { appendEvent, createContainer, voidEvent } from '../src/ledger/ledger.ts';
+import { appendCorrection, appendEvent, createContainer, voidEvent } from '../src/ledger/ledger.ts';
 import {
   FakeNotifier,
   LoggingNotifier,
@@ -434,5 +434,106 @@ describe('dispatch: WhatsApp, then email, then SMS; every attempt is recorded', 
     await withActor(cha, (cl) => dispatchPending(cl, asMap(n)));
     const m = n.whatsapp.sent.find((x) => x.to === '+94772220002' && x.text.includes(c.containerNo))!;
     expect(m.text).toBe(renderNotification('haulier_cleared', 'ta', { container: c.containerNo }).text);
+  });
+});
+
+describe('dispatch is safe against stale events, malformed rows, overlap and provider errors', () => {
+  const only = (n: FakeNotifier): Partial<Record<Channel, Notifier>> => ({ whatsapp: n });
+
+  /** A fresh CHA with its own client and haulier (each with one WhatsApp contact) and a shared container. */
+  async function world() {
+    const c1 = await seedActor('cha');
+    const cl = await seedActor('client');
+    const hl = await seedActor('haulier');
+    await addContact(cl, { whatsapp: '+94771110011' });
+    await addContact(hl, { whatsapp: '+94772220022' });
+    const container = await withActor(c1, async (c) => {
+      const k = await createContainer(c, { blNo: newBl(), containerNo: validContainerNo() });
+      await grantAccess(c, { containerId: k.id, granteeCompanyId: cl.companyId, kind: 'client' });
+      await grantAccess(c, { containerId: k.id, granteeCompanyId: hl.companyId, kind: 'haulier' });
+      return k;
+    });
+    return { cha: c1, cl, hl, container };
+  }
+  const release = (w: Awaited<ReturnType<typeof world>>) =>
+    withActor(w.cha, async (c) => {
+      const e = await appendEvent(c, { containerId: w.container.id, eventType: 'release_advice', occurredAt: new Date('2026-10-14T03:00:00Z'), source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'x' } });
+      await notifyAfterEvent(c, e);
+      return e;
+    });
+
+  test('a notification whose event was voided before it was sent is skipped, not sent', async () => {
+    const w = await world();
+    const e = await release(w);
+    await withActor(w.cha, (c) => voidEvent(c, e.id, { source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'wrong container' } }));
+    const n = new FakeNotifier('whatsapp');
+    const summary = await withActor(w.cha, (c) => dispatchPending(c, only(n)));
+    expect(n.sent).toHaveLength(0);
+    expect(summary).toEqual({ sent: 0, failed: 0, skipped: 2 });
+    const rows = await outbox(w.cha);
+    for (const r of rows) {
+      const log = await attempts(w.cha, r.id);
+      expect(log).toEqual([expect.objectContaining({ outcome: 'skipped', channel: null, error: expect.stringContaining('no longer current') })]);
+    }
+  });
+
+  test('a replaced event is not announced from the queue either', async () => {
+    const w = await world();
+    const e = await release(w);
+    await withActor(w.cha, (c) =>
+      appendCorrection(c, e.id, { containerId: w.container.id, eventType: 'release_advice', occurredAt: new Date('2026-10-14T05:00:00Z'), source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'time fixed' } }),
+    );
+    const n = new FakeNotifier('whatsapp');
+    await withActor(w.cha, (c) => dispatchPending(c, only(n)));
+    expect(n.sent).toHaveLength(0);
+  });
+
+  test('two overlapping dispatches send each notification once', async () => {
+    const w = await world();
+    await release(w); // queues: client first, then haulier
+    let started!: () => void;
+    const hasStarted = new Promise<void>((r) => (started = r));
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const a = new FakeNotifier('whatsapp');
+    const gated: Notifier = {
+      channel: 'whatsapp',
+      send: async (m) => {
+        started();
+        await gate; // run A is stuck on its first row while run B goes through the queue and commits
+        return a.send(m);
+      },
+    };
+    const first = withActor(w.cha, (c) => dispatchPending(c, { whatsapp: gated }));
+    await hasStarted;
+    const b = new FakeNotifier('whatsapp');
+    await withActor(w.cha, (c) => dispatchPending(c, only(b)));
+    open();
+    await first;
+    const toHaulier = [...a.sent, ...b.sent].filter((m) => m.to === '+94772220022');
+    expect(toHaulier).toHaveLength(1);
+    expect([...a.sent, ...b.sent].filter((m) => m.to === '+94771110011')).toHaveLength(1);
+  });
+
+  test('a provider error that is not a NotifierError is stored as a fixed text, never its message', async () => {
+    const w = await world();
+    await release(w);
+    const leaky: Notifier = { channel: 'whatsapp', send: async () => { throw new Error('connect ECONNREFUSED 10.0.0.5:443 for +94771110011'); } };
+    await withActor(w.cha, (c) => dispatchPending(c, { whatsapp: leaky }));
+    const [row] = await outbox(w.cha);
+    const [log] = await attempts(w.cha, row!.id);
+    expect(log).toMatchObject({ outcome: 'failed', error: 'provider error' });
+  });
+
+  test('every kind must carry the parameters its template needs (a row that cannot be rendered cannot exist)', async () => {
+    const w = await world();
+    const enq = (kind: 'client_status' | 'haulier_assigned' | 'haulier_cleared' | 'suggestion_reminder', params: Record<string, string>) =>
+      withActor(w.cha, (c) => enqueueNotification(c, { kind, recipientCompanyId: w.cl.companyId, recipientUserId: w.cl.userId, params: params as never }));
+    await expect(enq('client_status', {})).rejects.toThrow(/check constraint/);
+    await expect(enq('client_status', { container: w.container.containerNo })).rejects.toThrow(/check constraint/);
+    await expect(enq('haulier_cleared', {})).rejects.toThrow(/check constraint/);
+    await expect(enq('haulier_assigned', { count: '2' })).rejects.toThrow(/check constraint/);
+    await expect(enq('suggestion_reminder', { container: w.container.containerNo })).rejects.toThrow(/check constraint/);
+    await expect(enq('suggestion_reminder', { count: '2' })).resolves.toBeTruthy();
   });
 });
