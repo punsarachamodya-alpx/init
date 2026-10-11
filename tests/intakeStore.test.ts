@@ -7,9 +7,9 @@ import { withActor } from '../src/db/withActor.ts';
 import { ConfirmationError, buildSuggestion, confirmSuggestionById, intake, intakeAndStore, listInbox, listStaleUndecided, loadSuggestion, recordManualEvent, rejectSuggestionById, saveSuggestion } from '../src/intake/index.ts';
 import type { Extractor, RawExtraction, Suggestion } from '../src/intake/index.ts';
 import { ExtractionFailedError } from '../src/intake/index.ts';
-import { createContainer, listEvents } from '../src/ledger/ledger.ts';
+import { appendEvent, createContainer, listEvents } from '../src/ledger/ledger.ts';
 import { signActor } from '../src/db/actorToken.ts';
-import { newBl, seedActor } from './helpers.ts';
+import { newBl, seedActor, seedUser } from './helpers.ts';
 import type { TestActor } from './helpers.ts';
 
 let cha: TestActor;
@@ -213,6 +213,35 @@ describe('confirming by id: the server loads the suggestion, the caller supplies
     await expect(
       withActor(outsider, (c) => c.query(`INSERT INTO intake_decisions (company_id, suggestion_id, decision, reason) VALUES ($1, $2, 'rejected', 'no')`, [outsider.companyId, chas.id])),
     ).rejects.toThrow(/foreign key/);
+  });
+
+  test('a decision must point at an event made from THIS suggestion\'s evidence, once', async () => {
+    const a = await store(cha, DO_RAW(), `${DO_TEXT()}\nREF A`);
+    const b = await store(cha, DO_RAW(), `${DO_TEXT()}\nREF B`);
+    const done = await withActor(cha, (c) => confirmSuggestionById(c, a.id, { eventType: 'cusdec_lodged', occurredAt: when, fields: { ...a.suggestion.fields } }));
+    const decide = (actor: TestActor, suggestionId: string, eventId: string) =>
+      withActor(actor, (c) => c.query(`INSERT INTO intake_decisions (company_id, suggestion_id, decision, event_id) VALUES ($1, $2, 'confirmed', $3)`, [actor.companyId, suggestionId, eventId]));
+    // suggestion B "confirmed" by pointing at the event that came from suggestion A (same person, same company)
+    await expect(decide(cha, b.id, done.event.id)).rejects.toThrow(/row-level security/);
+    // ...or at a manual event
+    const manual = await withActor(cha, (c) => recordManualEvent(c, { containerNo: 'ZZZU1234564', blNo: bl, eventType: 'channel_assigned', occurredAt: when, reason: 'seen on the ASYCUDA screen' }));
+    await expect(decide(cha, b.id, manual.event.id)).rejects.toThrow(/row-level security/);
+    // a second suggestion over the SAME evidence cannot claim the same event (one decision per event)
+    const twin = await withActor(cha, (c) => saveSuggestion(c, a.suggestion, 'fake'));
+    await expect(decide(cha, twin.id, done.event.id)).rejects.toThrow(/duplicate key|unique/);
+  });
+
+  test('a decision must point at an event recorded by the same person, not a colleague', async () => {
+    const colleague = { companyId: cha.companyId, userId: await seedUser(cha.companyId, 'cha') };
+    const s = await store(cha, DO_RAW(), `${DO_TEXT()}\nREF C`);
+    const ev = await withActor(cha, (c) => appendEvent(c, { containerId, eventType: 'exam', occurredAt: when, source: { type: 'person', ref: 'x' }, evidence: s.suggestion.evidence }));
+    await expect(
+      withActor(colleague, (c) => c.query(`INSERT INTO intake_decisions (company_id, suggestion_id, decision, event_id) VALUES ($1, $2, 'confirmed', $3)`, [cha.companyId, s.id, ev.id])),
+    ).rejects.toThrow(/row-level security/);
+    // the same person can (the event is theirs and made from this evidence)
+    await expect(
+      withActor(cha, (c) => c.query(`INSERT INTO intake_decisions (company_id, suggestion_id, decision, event_id) VALUES ($1, $2, 'confirmed', $3)`, [cha.companyId, s.id, ev.id])),
+    ).resolves.toBeTruthy();
   });
 
   test('rejecting needs a reason, which is stored with the decider', async () => {

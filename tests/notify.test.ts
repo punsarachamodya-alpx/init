@@ -139,7 +139,6 @@ describe('contacts and the outbox follow the sharing rules', () => {
     expect(visible).not.toContain(stranger.userId);
     await withActor(cha, (cl) => revokeAccess(cl, { containerId: c.id, granteeCompanyId: haulier.companyId, kind: 'haulier' }));
     // the same haulier company is still shared on another container created above, so check a company with only this grant
-    expect(c.id).toBeTruthy();
   });
 
   test('a revoked-only company\'s contacts disappear', async () => {
@@ -185,8 +184,8 @@ describe('contacts and the outbox follow the sharing rules', () => {
       withActor(client, (c) => c.query(`INSERT INTO user_contacts (company_id, user_id, sms) VALUES ($1, $2, '+94776660006')`, [haulier.companyId, haulier.userId])),
     ).rejects.toThrow(/row-level security/);
     await expect(
-      withActor(cha, (c) => c.query(`INSERT INTO user_contacts (company_id, user_id, sms) VALUES ($1, $2, '+94776660007')`, [cha.companyId, (colleague)])),
-    ).rejects.toThrow(/foreign key/); // cha_ops may add for its own users only
+      withActor(cha, (c) => c.query(`INSERT INTO user_contacts (company_id, user_id, sms) VALUES ($1, $2, '+94776660007')`, [cha.companyId, chaOps2])),
+    ).rejects.toThrow(/row-level security/); // not even a CHA colleague: a contact row is one per user, so it could be squatted
   });
 
   test('a sender can address its own users and its current grantees, nobody else', async () => {
@@ -197,7 +196,19 @@ describe('contacts and the outbox follow the sharing rules', () => {
     await expect(enq(cha)).resolves.toBeTruthy(); // its own users
     await expect(enq(stranger)).rejects.toThrow(/row-level security/);
     await expect(enq(haulierB)).rejects.toThrow(/row-level security/);
-    expect(c.id).toBeTruthy();
+  });
+
+  test('an event reference must be an event the sender can see', async () => {
+    const c = await sharedContainer();
+    const mine = await withActor(cha, (cl) => appendEvent(cl, { containerId: c.id, eventType: 'channel_assigned', occurredAt: new Date('2026-10-14T03:00:00Z'), source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'x' } }));
+    const other = await seedActor('cha');
+    const k = await withActor(other, (cl) => createContainer(cl, { blNo: newBl(), containerNo: validContainerNo() }));
+    const theirs = await withActor(other, (cl) => appendEvent(cl, { containerId: k.id, eventType: 'channel_assigned', occurredAt: new Date('2026-10-14T03:00:00Z'), source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'x' } }));
+    const enq = (eventId: string) =>
+      withActor(cha, (cl) => enqueueNotification(cl, { kind: 'client_status', recipientCompanyId: client.companyId, recipientUserId: client.userId, params: { container: c.containerNo, status: 'channel_assigned' }, eventId }));
+    await expect(enq(theirs.id)).rejects.toThrow(/row-level security/); // another company's event: refused, and no unique/foreign-key probing
+    await expect(enq(crypto.randomUUID())).rejects.toThrow(/row-level security/); // a nonexistent id looks the same
+    await expect(enq(mine.id)).resolves.toBeTruthy();
   });
 
   test('parameters are restricted to a container number, a status and a count', async () => {
