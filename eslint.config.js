@@ -17,8 +17,23 @@ const RAW_DB = {
 // JSX text with letters and literal text attributes are refused; punctuation, numbers and {expressions} are fine.
 const NO_JSX_LITERALS = [
   { selector: 'JSXText[value=/\\p{L}/u]', message: 'Hardcoded text in JSX: add a key to /locales and use tr(...).' },
-  { selector: 'JSXAttribute[name.name=/^(title|alt|placeholder|aria-label|label)$/] > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX attribute: use tr(...).' },
+  { selector: 'JSXAttribute[name.name=/^(title|alt|placeholder|aria-label|aria-description|label)$/] > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX attribute: use tr(...).' },
+  { selector: 'JSXElement > JSXExpressionContainer > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in JSX braces: use tr(...).' },
+  { selector: 'JSXElement > JSXExpressionContainer > TemplateLiteral > TemplateElement[value.raw=/\\p{L}/u]', message: 'Hardcoded text in a JSX template literal: use tr(...).' },
+  { selector: 'JSXElement > JSXExpressionContainer > ConditionalExpression > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX conditional: use tr(...).' },
+  { selector: 'JSXElement > JSXExpressionContainer > LogicalExpression > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX expression: use tr(...).' },
 ];
+
+// Only src/intake/confirm.ts writes the ledger from intake. The layers around it (web app, board, notifications)
+// read the ledger and call confirmSuggestionById / recordManualEvent; they may not import its writers
+// (type-only imports are fine) nor confirmSuggestion, which trusts a caller-supplied suggestion.
+const NO_LEDGER_WRITES = {
+  patterns: [
+    ...RAW_DB.patterns,
+    { group: ['**/ledger/*'], allowTypeImports: true, message: 'Write through src/intake (confirmSuggestionById, recordManualEvent), not the ledger directly.' },
+    { group: ['**/intake', '**/intake/index*', '**/intake/confirm*'], importNames: ['confirmSuggestion'], message: 'Use confirmSuggestionById: it loads the suggestion from the database.' },
+  ],
+};
 
 const DB_SYNTAX = [
   {
@@ -44,5 +59,9 @@ export default tseslint.config(
   },  {
     files: ['app/**/*.{ts,tsx}'],
     rules: { 'no-restricted-syntax': ['error', ...DB_SYNTAX, ...NO_JSX_LITERALS] },
+  },
+  {
+    files: ['app/**/*.{ts,tsx}', 'src/web/**/*.ts', 'src/board/**/*.ts', 'src/notify/**/*.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': ['error', NO_LEDGER_WRITES] },
   },
 );

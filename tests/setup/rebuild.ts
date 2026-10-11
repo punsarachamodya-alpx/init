@@ -10,6 +10,9 @@ const APP_PASSWORD = 'colombo_app_pw'; // throwaway, local synthetic databases o
  */
 export async function rebuildDatabase(name: string): Promise<void> {
   if (!/^colombo_(test|e2e)$/.test(name)) throw new Error(`refusing to rebuild "${name}": only colombo_test and colombo_e2e`);
+  // It drops a database and resets the app role's password: only ever on this machine.
+  const host = new URL(dbUrl('ADMIN_DATABASE_URL')).hostname;
+  if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) throw new Error(`refusing to rebuild a database on "${host}": local synthetic databases only`);
   const admin = new pg.Client({ connectionString: dbUrl('ADMIN_DATABASE_URL') });
   await admin.connect();
   try {
