@@ -22,11 +22,21 @@ const NO_JSX_LITERALS = [
   { selector: 'JSXElement > JSXExpressionContainer > TemplateLiteral > TemplateElement[value.raw=/\\p{L}/u]', message: 'Hardcoded text in a JSX template literal: use tr(...).' },
   { selector: 'JSXElement > JSXExpressionContainer > ConditionalExpression > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX conditional: use tr(...).' },
   { selector: 'JSXElement > JSXExpressionContainer > LogicalExpression > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX expression: use tr(...).' },
+  { selector: 'JSXFragment > JSXExpressionContainer > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX fragment: use tr(...).' },
+  { selector: 'JSXExpressionContainer > BinaryExpression[operator="+"] > Literal[value=/\\p{L}/u]', message: 'Hardcoded text concatenated in JSX: use tr(...) with variables.' },
+  { selector: 'JSXAttribute[name.name=/^(title|alt|placeholder|aria-label|aria-description|label)$/] > JSXExpressionContainer > Literal[value=/\\p{L}/u]', message: 'Hardcoded text in a JSX attribute: use tr(...).' },
 ];
 
 // Only src/intake/confirm.ts writes the ledger from intake. The layers around it (web app, board, notifications)
 // read the ledger and call confirmSuggestionById / recordManualEvent; they may not import its writers
 // (type-only imports are fine) nor confirmSuggestion, which trusts a caller-supplied suggestion.
+const LEDGER_SYNTAX = [
+  { selector: "ImportExpression[source.value=/\\/ledger\\//]", message: 'Do not import the ledger dynamically: write through src/intake.' },
+  { selector: "ExportNamedDeclaration[source.value=/\\/ledger\\//]", message: 'Do not re-export the ledger writers.' },
+  { selector: "Literal[value=/INSERT\\s+INTO\\s+events/i]", message: 'The ledger is written through src/intake (confirm.ts), not by raw SQL here.' },
+  { selector: "TemplateElement[value.raw=/INSERT\\s+INTO\\s+events/i]", message: 'The ledger is written through src/intake (confirm.ts), not by raw SQL here.' },
+];
+
 const NO_LEDGER_WRITES = {
   patterns: [
     ...RAW_DB.patterns,
@@ -58,10 +68,14 @@ export default tseslint.config(
     },
   },  {
     files: ['app/**/*.{ts,tsx}'],
-    rules: { 'no-restricted-syntax': ['error', ...DB_SYNTAX, ...NO_JSX_LITERALS] },
+    rules: { 'no-restricted-syntax': ['error', ...DB_SYNTAX, ...LEDGER_SYNTAX, ...NO_JSX_LITERALS] },
   },
   {
     files: ['app/**/*.{ts,tsx}', 'src/web/**/*.ts', 'src/board/**/*.ts', 'src/notify/**/*.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': ['error', NO_LEDGER_WRITES] },
+  },
+  {
+    files: ['src/web/**/*.ts', 'src/board/**/*.ts', 'src/notify/**/*.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...DB_SYNTAX, ...LEDGER_SYNTAX] },
   },
 );

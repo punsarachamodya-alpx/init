@@ -175,7 +175,7 @@ describe('contacts and the outbox follow the sharing rules', () => {
     await expect(owner.query("UPDATE user_contacts SET language = 'en'")).rejects.toThrow(/append-only/);
   });
 
-  test('a user cannot add contacts for a colleague (unless cha_ops), nor for another company', async () => {
+  test('a user cannot add contacts for a colleague (not even a CHA for its staff), nor for another company', async () => {
     const colleague = await seedUser(client.companyId, 'client');
     await expect(
       withActor(client, (c) => c.query(`INSERT INTO user_contacts (company_id, user_id, sms) VALUES ($1, $2, '+94776660006')`, [client.companyId, colleague])),
@@ -488,7 +488,7 @@ describe('dispatch is safe against stale events, malformed rows, overlap and pro
     }
   });
 
-  test('a replaced event is not announced from the queue either', async () => {
+  test('a replaced event is still announced (the status is still true); only a chain that ends in a void is not', async () => {
     const w = await world();
     const e = await release(w);
     await withActor(w.cha, (c) =>
@@ -496,7 +496,36 @@ describe('dispatch is safe against stale events, malformed rows, overlap and pro
     );
     const n = new FakeNotifier('whatsapp');
     await withActor(w.cha, (c) => dispatchPending(c, only(n)));
+    expect(n.sent.map((m) => m.to).sort()).toEqual(['+94771110011', '+94772220022']);
+  });
+
+  test('a replacement that is later voided ends the chain in a void: nothing is announced', async () => {
+    const w = await world();
+    const e = await release(w);
+    const fixed = await withActor(w.cha, (c) =>
+      appendCorrection(c, e.id, { containerId: w.container.id, eventType: 'release_advice', occurredAt: new Date('2026-10-14T05:00:00Z'), source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'time fixed' } }),
+    );
+    await withActor(w.cha, (c) => voidEvent(c, fixed.id, { source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'wrong container' } }));
+    const n = new FakeNotifier('whatsapp');
+    await withActor(w.cha, (c) => dispatchPending(c, only(n)));
     expect(n.sent).toHaveLength(0);
+  });
+
+  test('a void that commits while a dispatch is already running stops the messages it has not sent yet', async () => {
+    const w = await world();
+    const e = await release(w); // queues: client first, then haulier
+    let started!: () => void;
+    const hasStarted = new Promise<void>((r) => (started = r));
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const a = new FakeNotifier('whatsapp');
+    const gated: Notifier = { channel: 'whatsapp', send: async (m) => { started(); await gate; return a.send(m); } };
+    const run = withActor(w.cha, (c) => dispatchPending(c, { whatsapp: gated })); // read the queue, now stuck on the client message
+    await hasStarted;
+    await withActor(w.cha, (c) => voidEvent(c, e.id, { source: { type: 'person', ref: 'x' }, evidence: { type: 'manual', note: 'wrong container' } }));
+    open();
+    await run;
+    expect(a.sent.filter((m) => m.to === '+94772220022')).toHaveLength(0); // "cleared to collect" must not reach the haulier
   });
 
   test('two overlapping dispatches send each notification once', async () => {

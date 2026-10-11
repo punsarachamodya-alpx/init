@@ -17,8 +17,6 @@ interface Pending {
   params: NotificationParams;
   recipient_user_id: string;
   rounds: number;
-  /** The event this notification announces has since been replaced or voided. */
-  stale: boolean;
 }
 
 interface Contact {
@@ -29,6 +27,20 @@ interface Contact {
 }
 
 const MAX_ERROR = 200;
+
+/**
+ * True when the event this notification announces has been voided: a void retracts the event (and cannot itself be
+ * voided or replaced), so the correction chain after the event contains a void exactly when the event is no longer true.
+ * A plain replacement (a corrected time, say) leaves the status true, so it is still announced.
+ */
+const STALE_EVENT = `(n.event_id IS NOT NULL AND EXISTS (
+  WITH RECURSIVE chain AS (
+    SELECT e.id, e.correction_kind FROM events e WHERE e.corrects_event_id = n.event_id
+    UNION ALL
+    SELECT x.id, x.correction_kind FROM events x JOIN chain ch ON x.corrects_event_id = ch.id
+  )
+  SELECT 1 FROM chain WHERE correction_kind = 'void'
+))`;
 // Only a NotifierError's message is kept (a provider says what it wants stored); anything else may carry an address,
 // a URL or a token from a client library, so it is reduced to a fixed text.
 const errorText = (err: unknown) => (err instanceof NotifierError ? err.message.slice(0, MAX_ERROR) : 'provider error');
@@ -50,8 +62,7 @@ export async function dispatchPending(
   const summary: DispatchSummary = { sent: 0, failed: 0, skipped: 0 };
 
   const { rows: pending } = await c.query<Pending>(
-    `SELECT n.id, n.kind, n.params, n.recipient_user_id, coalesce(max(a.round), 0)::int AS rounds,
-            (n.event_id IS NOT NULL AND EXISTS (SELECT 1 FROM events x WHERE x.corrects_event_id = n.event_id)) AS stale
+    `SELECT n.id, n.kind, n.params, n.recipient_user_id, coalesce(max(a.round), 0)::int AS rounds
      FROM notifications n LEFT JOIN notification_attempts a ON a.notification_id = n.id
      GROUP BY n.id
      HAVING NOT coalesce(bool_or(a.outcome IN ('sent', 'skipped')), false) AND coalesce(max(a.round), 0) < $1
@@ -62,10 +73,17 @@ export async function dispatchPending(
   for (const n of pending) {
     const lock = await c.query<{ ok: boolean }>('SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS ok', [n.id]);
     if (!lock.rows[0]?.ok) continue;
-    // The list above was read before the lock: another dispatcher may have finished this one in between.
-    const done = await c.query("SELECT coalesce(max(round), 0)::int AS rounds, coalesce(bool_or(outcome IN ('sent', 'skipped')), false) AS final FROM notification_attempts WHERE notification_id = $1", [n.id]);
-    if (done.rows[0]?.final === true || (done.rows[0]?.rounds ?? 0) >= maxAttempts) continue;
-    const round = (done.rows[0]?.rounds ?? n.rounds) + 1;
+    // Everything that can change while another dispatcher or a void is running is read AFTER the lock, per row.
+    const state = await c.query<{ rounds: number; final: boolean; stale: boolean }>(
+      `SELECT coalesce((SELECT max(round) FROM notification_attempts WHERE notification_id = n.id), 0)::int AS rounds,
+              coalesce((SELECT bool_or(outcome IN ('sent', 'skipped')) FROM notification_attempts WHERE notification_id = n.id), false) AS final,
+              ${STALE_EVENT} AS stale
+       FROM notifications n WHERE n.id = $1`,
+      [n.id],
+    );
+    const st = state.rows[0];
+    if (!st || st.final || st.rounds >= maxAttempts) continue;
+    const round = st.rounds + 1;
     const record = (outcome: 'sent' | 'failed' | 'skipped', channel: Channel | null, providerRef: string | null, error: string | null) =>
       c.query(
         `INSERT INTO notification_attempts (company_id, notification_id, round, channel, outcome, provider_ref, error)
@@ -73,8 +91,8 @@ export async function dispatchPending(
         [n.id, round, channel, outcome, providerRef, error],
       );
 
-    if (n.stale) {
-      // Announcing a voided or replaced event ("cleared to collect") would tell someone something untrue.
+    if (st.stale) {
+      // Announcing a voided event ("cleared to collect") would tell someone something untrue.
       await record('skipped', null, null, 'event no longer current');
       summary.skipped++;
       continue;

@@ -4,15 +4,30 @@ import { runMigrations } from '../../src/db/migrate.ts';
 
 const APP_PASSWORD = 'colombo_app_pw'; // throwaway, local synthetic databases only
 
+const LOCAL = new Set(['', 'localhost', '127.0.0.1', '::1', '[::1]']);
+
+/** Throws unless the connection string can only reach this machine (host, and node-pg's `?host=` override, local or a socket path). */
+export function assertLocalUrl(url: string, name: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${name} is not a valid URL: refusing to rebuild; local synthetic databases only`);
+  }
+  const hosts = [parsed.hostname, ...(parsed.searchParams.get('host')?.split(',') ?? [])];
+  const remote = hosts.filter((h) => !LOCAL.has(h) && !h.startsWith('/'));
+  if (remote.length > 0) throw new Error(`${name} points at a non-local host: refusing to rebuild; local synthetic databases only`);
+}
+
 /**
  * Drop and recreate a LOCAL synthetic database, migrate it as the owner role and install the throwaway actor key.
  * Used by the Vitest and Playwright setups; never point it at anything real (it drops the database).
  */
 export async function rebuildDatabase(name: string): Promise<void> {
   if (!/^colombo_(test|e2e)$/.test(name)) throw new Error(`refusing to rebuild "${name}": only colombo_test and colombo_e2e`);
-  // It drops a database and resets the app role's password: only ever on this machine.
-  const host = new URL(dbUrl('ADMIN_DATABASE_URL')).hostname;
-  if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) throw new Error(`refusing to rebuild a database on "${host}": local synthetic databases only`);
+  // It drops a database, resets the app role's password and installs the actor key: only ever on this machine.
+  assertLocalUrl(dbUrl('ADMIN_DATABASE_URL'), 'ADMIN_DATABASE_URL');
+  assertLocalUrl(dbUrl('OWNER_DATABASE_URL'), 'OWNER_DATABASE_URL');
   const admin = new pg.Client({ connectionString: dbUrl('ADMIN_DATABASE_URL') });
   await admin.connect();
   try {

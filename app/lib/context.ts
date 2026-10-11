@@ -50,7 +50,10 @@ export async function getViewer(): Promise<Viewer | null> {
     });
   } catch (err) {
     // The database refused the signed token (ActorContextError, by name: src/db/actorToken is not importable here).
-    if (err instanceof Error && err.name === 'ActorContextError') return null;
+    if (err instanceof Error && err.name === 'ActorContextError') {
+      console.error('actor token rejected by the database: treating the session as signed out (rotated key or clock skew?)');
+      return null;
+    }
     throw err;
   }
   if (!row || !(ROLES as readonly string[]).includes(row.role)) return null;

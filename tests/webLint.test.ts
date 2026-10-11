@@ -24,6 +24,9 @@ describe('no hardcoded user-facing text in the web app (lint)', () => {
     ['a string literal in braces', wrap("<p>{'Hello'}</p>")],
     ['a template literal with words', wrap('<p>{`Hello ${1}`}</p>')],
     ['a literal aria-description', wrap('<button aria-description="Closes the panel" />')],
+    ['a literal in a braced attribute', wrap("<input placeholder={'Container number'} />")],
+    ['a literal in a fragment', "export const X = () => (<>{'Hello'}</>);\n"],
+    ['string concatenation', wrap("<p>{'Total: ' + 5}</p>")],
     ['a literal after &&', wrap("<p>{1 > 0 && 'Shown'}</p>")],
     ['a conditional with a literal', wrap("<p>{1 > 0 ? 'Yes' : tr('bool.false')}</p>")],
   ])('refused: %s', async (_name, code) => {
@@ -35,6 +38,7 @@ describe('no hardcoded user-facing text in the web app (lint)', () => {
     ['punctuation and numbers', wrap('<p>· 12 — ({1})</p>')],
     ['an expression attribute', wrap("<input placeholder={tr('manual.reason')} />")],
     ['a literal that is only punctuation or a number', wrap("<p>{' · '}{'12'}</p>")],
+    ['a comparison with a literal', wrap("<p>{x === 'cha_ops' ? tr('a') : null}</p>")],
     ['a non-text attribute', wrap('<input type="text" name="x" data-testid="y" />')],
   ])('allowed: %s', async (_name, code) => {
     expect(await lint('app/example.tsx', code)).toHaveLength(0);
@@ -48,12 +52,16 @@ describe('no hardcoded user-facing text in the web app (lint)', () => {
 describe('only src/intake/confirm.ts writes the ledger from intake, so the layers around it may not reach the ledger (lint)', () => {
   const lintImports = async (filePath: string, code: string) => {
     const [res] = await new ESLint({ cwd: root }).lintText(code, { filePath: path.join(root, filePath) });
-    return res!.messages.filter((m) => m.ruleId === '@typescript-eslint/no-restricted-imports');
+    return res!.messages.filter((m) => m.ruleId === '@typescript-eslint/no-restricted-imports' || m.ruleId === 'no-restricted-syntax');
   };
   const WRITES = [
     ['appendEvent', "import { appendEvent } from '../../src/ledger/ledger.ts';\nvoid appendEvent;\n"],
     ['voidEvent', "import { voidEvent } from '../ledger/ledger.ts';\nvoid voidEvent;\n"],
     ['createContainer', "import * as l from '../ledger/ledger.ts';\nvoid l;\n"],
+    ['dynamic import', "const l = await import('../ledger/ledger.ts');\nvoid l;\n"],
+    ['re-export', "export { appendEvent } from '../ledger/ledger.ts';\n"],
+    ['raw SQL string', "export const q = (c: { query(s: string): unknown }) => c.query('INSERT INTO events (company_id) VALUES (1)');\n"],
+    ['raw SQL template', "export const q = (c: { query(s: string): unknown }) => c.query(`INSERT INTO events\n (company_id) VALUES (1)`);\n"],
   ] as const;
 
   test.each(['app/example.tsx', 'src/web/example.ts', 'src/board/example.ts', 'src/notify/example.ts'])('%s cannot import the ledger writers', async (file) => {

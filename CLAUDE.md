@@ -6,7 +6,7 @@ The app tracks and coordinates. It never files customs declarations. Only licens
 
 ## Commands
 Stack: TypeScript, Next.js (App Router), PostgreSQL with row-level security, pg-boss job queue, Vitest, Playwright, pnpm. See SPEC.md.
-- `pnpm dev` - run the web app locally (needs `APP_DATABASE_URL`, `ACTOR_CONTEXT_SECRET` and a migrated database; `pnpm seed:demo` writes synthetic demo data and the dev login picker file; `INTAKE_EXTRACTOR=fake` gives a rule-based stand-in for the model, never in production)
+- `pnpm dev` - run the web app locally (needs `APP_DATABASE_URL`, `ACTOR_CONTEXT_SECRET` and a migrated database; `pnpm seed:demo` writes synthetic demo data and the dev login picker file; `INTAKE_EXTRACTOR=fake` gives a rule-based stand-in for the model, never in production; the real model is used only with `ANTHROPIC_API_KEY` AND `INTAKE_ALLOW_REAL_API=1`, set that only for synthetic data or after the PDPA review)
 - `pnpm seed:demo` - synthetic CHA, client, haulier, three containers (writes `.demo-users.json`, gitignored)
 - `pnpm build` / `pnpm start` - production build; the dev login picker is disabled there and `SESSION_SECRET` is required
 - `pnpm test` - unit and integration tests (Vitest); needs local PostgreSQL with the `colombo_owner` role (it rebuilds the `colombo_test` database each run)
